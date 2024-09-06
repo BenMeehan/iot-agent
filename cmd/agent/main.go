@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
@@ -21,7 +22,7 @@ func main() {
 	}
 
 	// Initialize shared MQTT connection
-	if err := mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID); err != nil {
+	if err := mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CAFile); err != nil {
 		logrus.WithError(err).Fatal("Error initializing MQTT")
 	}
 
@@ -35,6 +36,7 @@ func main() {
 			case "heartbeat":
 				heartbeatService := &services.HeartbeatService{
 					PubTopic: serviceConfig.Topic,
+					Interval: time.Duration(serviceConfig.Interval) * time.Second,
 				}
 				registry.RegisterService(serviceName, heartbeatService)
 			}

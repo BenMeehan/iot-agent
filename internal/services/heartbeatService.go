@@ -12,6 +12,7 @@ import (
 // HeartbeatService defines the heartbeat service
 type HeartbeatService struct {
 	PubTopic string
+	Interval time.Duration
 }
 
 // Start runs the heartbeat service and publishes to the MQTT broker

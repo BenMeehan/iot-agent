@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"io/ioutil"
+	"io"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -17,11 +17,13 @@ type Config struct {
 type MQTTConfig struct {
 	Broker   string `yaml:"broker"`
 	ClientID string `yaml:"client_id"`
+	CAFile   string `yaml:"ca_certificate"`
 }
 
 type ServiceConfig struct {
-	Topic   string `yaml:"topic"`
-	Enabled bool   `yaml:"enabled"`
+	Topic    string `yaml:"topic"`
+	Enabled  bool   `yaml:"enabled"`
+	Interval int    `yaml:"interval"`
 }
 
 // LoadConfig loads the YAML configuration file and unmarshals it into a Config struct
@@ -33,7 +35,7 @@ func LoadConfig(filename string) (*Config, error) {
 	}
 	defer file.Close()
 
-	bytes, err := ioutil.ReadAll(file)
+	bytes, err := io.ReadAll(file)
 	if err != nil {
 		logrus.WithError(err).Error("Error reading config file")
 		return nil, err
