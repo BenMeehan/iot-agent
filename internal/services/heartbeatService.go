@@ -1,9 +1,11 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 
 	"github.com/sirupsen/logrus"
@@ -13,7 +15,10 @@ import (
 type HeartbeatService struct {
 	PubTopic string
 	Interval time.Duration
+	DeviceID string
 }
+
+const STATUS_ALIVE = "1"
 
 // Start runs the heartbeat service and publishes to the MQTT broker
 func (h *HeartbeatService) Start() error {
@@ -25,8 +30,19 @@ func (h *HeartbeatService) Start() error {
 
 	go func() {
 		for {
-			message := time.Now().Format(time.RFC3339)
-			token := client.Publish(h.PubTopic, 0, false, message)
+			message := models.Heartbeat{
+				DeviceID:  h.DeviceID,
+				Timestamp: time.Now(),
+				Status:    STATUS_ALIVE,
+			}
+
+			payload, err := json.Marshal(message)
+			if err != nil {
+				logrus.WithError(err).Error("Failed to serialize heartbeat message")
+				continue
+			}
+
+			token := client.Publish(h.PubTopic, 0, false, payload)
 			token.Wait()
 			if token.Error() != nil {
 				logrus.WithError(token.Error()).Error("Failed to publish heartbeat")
