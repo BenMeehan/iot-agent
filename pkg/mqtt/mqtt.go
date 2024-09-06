@@ -6,7 +6,6 @@ import (
 	"os"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
 
@@ -34,10 +33,6 @@ func Initialize(broker, clientID, caFile string) error {
 	// Set up the MQTT client options
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(broker)
-
-	clientID = clientID + uuid.New().String()
-	logrus.Info("Using MQTT client ID ", clientID)
-
 	opts.SetClientID(clientID)
 	opts.SetTLSConfig(tlsConfig)
 	opts.SetAutoReconnect(true)

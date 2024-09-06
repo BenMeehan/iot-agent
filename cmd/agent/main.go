@@ -7,6 +7,7 @@ import (
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
+	"github.com/google/uuid"
 
 	"github.com/sirupsen/logrus"
 )
@@ -20,6 +21,8 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Error loading config")
 	}
+	config.MQTT.ClientID = config.MQTT.ClientID + uuid.New().String()
+	logrus.Info("Using MQTT client ID ", config.MQTT.ClientID)
 
 	// Initialize shared MQTT connection
 	if err := mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CAFile); err != nil {
@@ -37,6 +40,7 @@ func main() {
 				heartbeatService := &services.HeartbeatService{
 					PubTopic: serviceConfig.Topic,
 					Interval: time.Duration(serviceConfig.Interval) * time.Second,
+					DeviceID: config.MQTT.ClientID,
 				}
 				registry.RegisterService(serviceName, heartbeatService)
 			}

@@ -1,10 +1,10 @@
 mqtt:
   broker: "ssl://broker.emqx.io:8883"
-  client_id: "agent-001"
+  client_id: "iot_agent-"
   ca_certificate: "certs/broker.emqx.io-ca.crt"
 
 services:
   heartbeat:
-    topic: "iot/agent/heartbeat"
+    topic: "iot-heartbeat"
     enabled: true
     interval: 10
