@@ -16,6 +16,7 @@ type HeartbeatService struct {
 	PubTopic string
 	Interval time.Duration
 	DeviceID string
+	QOS      int
 }
 
 const STATUS_ALIVE = "1"
@@ -42,7 +43,7 @@ func (h *HeartbeatService) Start() error {
 				continue
 			}
 
-			token := client.Publish(h.PubTopic, 0, false, payload)
+			token := client.Publish(h.PubTopic, byte(h.QOS), false, payload)
 			token.Wait()
 			if token.Error() != nil {
 				logrus.WithError(token.Error()).Error("Failed to publish heartbeat")
