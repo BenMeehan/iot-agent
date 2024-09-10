@@ -11,6 +11,12 @@ go run cmd/agent/main.go
 1. Add necessary configurations in config/config.yaml
 2. Add a new file in internal/services, similar to heartbeatService.go and write your logic there.
 
+## Rules
+1. Please use camel case for variables and constants
+2. Please use snake case for files and folders
+
 ### URLS
 
 https://www.emqx.com/en/mqtt/public-mqtt5-broker
+
+okay now, ill send you my code. please vet it. I mean add proper casing and meaningful naming of variables, comments and logs. Dont over do the comments please, keep it readable
