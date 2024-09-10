@@ -10,7 +10,7 @@ services:
   registration:
     topic: "iot-registration"
     enabled: true
-    device_secret_file: "secrets/device_secret_PSK.txt"
+    device_secret_file: "secrets/.device.secret.PSK.txt"
     qos: 2
   heartbeat:
     topic: "iot-heartbeat"

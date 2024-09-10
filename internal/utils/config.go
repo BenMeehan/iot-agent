@@ -7,54 +7,57 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// Config represents the structure of the configuration file.
 type Config struct {
 	MQTT struct {
-		Broker        string `yaml:"broker"`
-		ClientID      string `yaml:"client_id"`
-		CACertificate string `yaml:"ca_certificate"`
+		Broker        string `yaml:"broker"`         // MQTT broker address
+		ClientID      string `yaml:"client_id"`      // MQTT client ID
+		CACertificate string `yaml:"ca_certificate"` // Path to the CA certificate
 	} `yaml:"mqtt"`
 
 	Identity struct {
-		DeviceFile string `yaml:"device_file"`
+		DeviceFile string `yaml:"device_file"` // Path to the device identity file
 	} `yaml:"identity"`
 
 	Services struct {
 		Registration struct {
-			Topic            string `yaml:"topic"`
-			Enabled          bool   `yaml:"enabled"`
-			DeviceSecretFile string `yaml:"device_secret_file"`
-			QOS              int    `yaml:"qos"`
-			DeviceIDFile     string `yaml:"deviceid_file"`
+			Topic            string `yaml:"topic"`              // MQTT topic for registration service
+			Enabled          bool   `yaml:"enabled"`            // Enable/disable registration service
+			DeviceSecretFile string `yaml:"device_secret_file"` // Path to the device secret file
+			QOS              int    `yaml:"qos"`                // MQTT QoS level for registration messages
+			DeviceIDFile     string `yaml:"deviceid_file"`      // Path to the device ID file (if any)
 		} `yaml:"registration"`
 
 		Heartbeat struct {
-			Topic    string `yaml:"topic"`
-			Enabled  bool   `yaml:"enabled"`
-			Interval int    `yaml:"interval"`
-			QOS      int    `yaml:"qos"`
+			Topic    string `yaml:"topic"`    // MQTT topic for heartbeat service
+			Enabled  bool   `yaml:"enabled"`  // Enable/disable heartbeat service
+			Interval int    `yaml:"interval"` // Interval between heartbeats (in seconds)
+			QOS      int    `yaml:"qos"`      // MQTT QoS level for heartbeat messages
 		} `yaml:"heartbeat"`
 	} `yaml:"services"`
 }
 
-// LoadConfig loads the YAML configuration file
+// LoadConfig loads the YAML configuration from the specified file.
+// It returns a pointer to the Config struct and an error if loading fails.
 func LoadConfig(filename string) (*Config, error) {
 	logrus.Infof("Loading configuration from file: %s", filename)
 
 	file, err := os.Open(filename)
 	if err != nil {
-		logrus.Errorf("Error opening config file: %v", err)
+		logrus.Errorf("Failed to open config file: %v", err)
 		return nil, err
 	}
 	defer file.Close()
 
+	// Decode the YAML file into the Config struct
 	var config Config
 	decoder := yaml.NewDecoder(file)
 	err = decoder.Decode(&config)
 	if err != nil {
-		logrus.Errorf("Error decoding config file: %v", err)
+		logrus.Errorf("Failed to decode config file: %v", err)
 		return nil, err
 	}
 
-	logrus.Infof("Configuration loaded successfully")
+	logrus.Infof("Configuration loaded successfully from %s", filename)
 	return &config, nil
 }
