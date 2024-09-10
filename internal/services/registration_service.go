@@ -3,12 +3,12 @@ package services
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 
+	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/sirupsen/logrus"
@@ -20,14 +20,16 @@ type RegistrationService struct {
 	DeviceSecretFile string
 	ClientID         string
 	QOS              int
-	DeviceInfo       identity.DeviceInfo
+	DeviceInfo       identity.DeviceInfoInterface
+	mqttClient       mqtt.MqttService
+	fileOps          file.FileService
 }
 
 // Start initiates the device registration process
 func (rs *RegistrationService) Start() error {
 	// Check if device ID is already present
-	existingDeviceID, err := rs.DeviceInfo.GetDeviceID()
-	if err == nil && existingDeviceID != "" {
+	existingDeviceID := rs.DeviceInfo.GetDeviceID()
+	if existingDeviceID != "" {
 		logrus.Infof("Device %s already registered with ID: %s", rs.ClientID, existingDeviceID)
 		return nil
 	}
@@ -37,9 +39,6 @@ func (rs *RegistrationService) Start() error {
 	if err != nil {
 		return err
 	}
-
-	client := mqtt.Client()
-	logrus.Infof("Starting device registration for client: %s", rs.ClientID)
 
 	payload := map[string]string{
 		"client_id":     rs.ClientID,
@@ -52,7 +51,7 @@ func (rs *RegistrationService) Start() error {
 	}
 
 	// Publish registration message to the broker
-	if err := client.Publish(rs.PubTopic, byte(rs.QOS), false, payloadBytes); err != nil {
+	if err := rs.mqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, payloadBytes); err != nil {
 		return errors.New("failed to publish registration message")
 	}
 
@@ -75,12 +74,11 @@ func (rs *RegistrationService) Start() error {
 
 // waitForRegistrationResponse listens for the device registration response
 func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<- string) {
-	client := mqtt.Client()
 	respTopic := rs.PubTopic + "/response/" + rs.ClientID
 	logrus.Infof("Listening for registration response on topic: %s", respTopic)
 
 	// Subscribe to the unique response topic
-	client.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
+	err := rs.mqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
 		var response map[string]string
 		err := json.Unmarshal(msg.Payload(), &response)
 		if err != nil {
@@ -97,17 +95,21 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 		// Send the device ID to the response channel
 		responseChannel <- deviceID
 	})
+
+	if err != nil {
+		logrus.WithError(err).Error("Failed to subscribe to registration response topic")
+		return
+	}
 }
 
 // readDeviceSecret reads and returns the device secret from the DeviceSecretFile
 func (rs *RegistrationService) readDeviceSecret() (string, error) {
-	data, err := os.ReadFile(rs.DeviceSecretFile)
+	secret, err := rs.fileOps.ReadFile(rs.DeviceSecretFile)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to read device secret file")
 		return "", errors.New("failed to read device secret file")
 	}
 
 	// Trim any extraneous whitespace characters (like newlines)
-	secret := strings.TrimSpace(string(data))
-	return secret, nil
+	return strings.TrimSpace(secret), nil
 }
