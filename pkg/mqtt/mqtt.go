@@ -9,25 +9,25 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var client mqtt.Client
+var mqttClient mqtt.Client
 
-// Initialize sets up the MQTT client with SSL/TLS
-func Initialize(broker, clientID, caFile string) error {
-	// Load CA certificate
-	caCert, err := os.ReadFile(caFile)
+// Initialize sets up the MQTT client with SSL/TLS and starts the connection.
+// It takes the MQTT broker address, client ID, and path to the CA certificate as arguments.
+func Initialize(broker, clientID, caCertPath string) error {
+	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
-		logrus.WithError(err).Error("Error reading CA certificate")
+		logrus.WithError(err).Error("Failed to read CA certificate")
 		return err
 	}
 
-	// Create a CA certificate pool and add the CA certificate
+	// Create a CA certificate pool and append the CA certificate to it
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(caCert)
 
 	// Create a TLS configuration with the CA certificate
 	tlsConfig := &tls.Config{
 		RootCAs:            caCertPool,
-		InsecureSkipVerify: true, // Verify the server certificate
+		InsecureSkipVerify: true, // Disable certificate validation for testing (not recommended for production)
 	}
 
 	// Set up the MQTT client options
@@ -36,25 +36,29 @@ func Initialize(broker, clientID, caFile string) error {
 	opts.SetClientID(clientID)
 	opts.SetTLSConfig(tlsConfig)
 	opts.SetAutoReconnect(true)
+
+	// Handler for successful MQTT connection
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		logrus.Info("MQTT client connected")
+		logrus.Info("MQTT client connected successfully")
 	})
+
+	// Handler for MQTT connection loss
 	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
 		logrus.WithError(err).Error("MQTT connection lost")
 	})
 
-	// Create and start the MQTT client
-	client = mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		logrus.WithError(token.Error()).Error("Error connecting to MQTT broker")
+	// Create and connect the MQTT client
+	mqttClient = mqtt.NewClient(opts)
+	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+		logrus.WithError(token.Error()).Error("Failed to connect to MQTT broker")
 		return token.Error()
 	}
 
-	logrus.Info("MQTT client initialized")
+	logrus.Info("MQTT client initialized and connected")
 	return nil
 }
 
-// Client returns the MQTT client instance
+// Client returns the initialized MQTT client instance.
 func Client() mqtt.Client {
-	return client
+	return mqttClient
 }

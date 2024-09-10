@@ -14,7 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// RegistrationService handles the device registration process
+// RegistrationService manages the device registration process
 type RegistrationService struct {
 	PubTopic         string
 	DeviceSecretFile string
@@ -23,7 +23,7 @@ type RegistrationService struct {
 	DeviceInfo       identity.DeviceInfo
 }
 
-// Start begins the device registration process
+// Start initiates the device registration process
 func (rs *RegistrationService) Start() error {
 	// Check if device ID is already present
 	existingDeviceID, err := rs.DeviceInfo.GetDeviceID()
@@ -41,7 +41,6 @@ func (rs *RegistrationService) Start() error {
 	client := mqtt.Client()
 	logrus.Infof("Starting device registration for client: %s", rs.ClientID)
 
-	// Create registration payload
 	payload := map[string]string{
 		"client_id":     rs.ClientID,
 		"device_secret": deviceSecret,
@@ -57,7 +56,6 @@ func (rs *RegistrationService) Start() error {
 		return errors.New("failed to publish registration message")
 	}
 
-	// Use a channel to wait for the response
 	responseChannel := make(chan string, 1)
 	go rs.waitForRegistrationResponse(responseChannel)
 
@@ -75,7 +73,7 @@ func (rs *RegistrationService) Start() error {
 	return nil
 }
 
-// waitForRegistrationResponse listens for a device-specific response
+// waitForRegistrationResponse listens for the device registration response
 func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<- string) {
 	client := mqtt.Client()
 	respTopic := rs.PubTopic + "/response/" + rs.ClientID
@@ -101,7 +99,7 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 	})
 }
 
-// readDeviceSecret reads the device secret from the DeviceSecretFile
+// readDeviceSecret reads and returns the device secret from the DeviceSecretFile
 func (rs *RegistrationService) readDeviceSecret() (string, error) {
 	data, err := os.ReadFile(rs.DeviceSecretFile)
 	if err != nil {

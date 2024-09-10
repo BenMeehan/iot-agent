@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// HeartbeatService defines the heartbeat service
+// HeartbeatService defines the structure and functionality of the heartbeat service
 type HeartbeatService struct {
 	PubTopic string
 	Interval time.Duration
@@ -19,9 +19,9 @@ type HeartbeatService struct {
 	QOS      int
 }
 
-const STATUS_ALIVE = "1"
+const StatusAlive = "1"
 
-// Start runs the heartbeat service and publishes to the MQTT broker
+// Start initiates the heartbeat service and continuously publishes heartbeat messages to the MQTT broker
 func (h *HeartbeatService) Start() error {
 	client := mqtt.Client()
 	if client == nil {
@@ -31,26 +31,29 @@ func (h *HeartbeatService) Start() error {
 
 	go func() {
 		for {
-			message := models.Heartbeat{
+			heartbeatMessage := models.Heartbeat{
 				DeviceID:  h.DeviceID,
 				Timestamp: time.Now(),
-				Status:    STATUS_ALIVE,
+				Status:    StatusAlive,
 			}
 
-			payload, err := json.Marshal(message)
+			payload, err := json.Marshal(heartbeatMessage)
 			if err != nil {
 				logrus.WithError(err).Error("Failed to serialize heartbeat message")
 				continue
 			}
 
+			// Publish the heartbeat message to the MQTT topic
 			token := client.Publish(h.PubTopic, byte(h.QOS), false, payload)
 			token.Wait()
 			if token.Error() != nil {
 				logrus.WithError(token.Error()).Error("Failed to publish heartbeat")
 			} else {
-				logrus.WithField("message", message).Info("Published heartbeat")
+				logrus.WithField("message", heartbeatMessage).Info("Heartbeat published successfully")
 			}
-			time.Sleep(10 * time.Second)
+
+			// Sleep for the specified interval before sending the next heartbeat
+			time.Sleep(h.Interval)
 		}
 	}()
 
