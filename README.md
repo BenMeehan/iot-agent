@@ -1,7 +1,3 @@
-Here’s an updated version of your README with more information about the heartbeat and registration services, as well as enhanced rules for coding and documentation:
-
----
-
 # IoT Agent
 
 An IoT agent designed to be modular and configurable, supporting a variety of services.
