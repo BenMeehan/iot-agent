@@ -12,15 +12,22 @@ type Identity struct {
 	ID string `json:"device_id"`
 }
 
+// DeviceInfoInterface defines the methods that DeviceInfo implements
+type DeviceInfoInterface interface {
+	LoadDeviceInfo() error
+	GetDeviceID() string
+	SaveDeviceID(deviceID string) error
+}
+
 // DeviceInfo manages the device identity and its associated file operations.
 type DeviceInfo struct {
 	DeviceInfoFile string
 	Config         Identity
 }
 
-// Init initializes a new DeviceInfo instance with the specified file path.
+// NewDeviceInfo initializes a new DeviceInfo instance with the specified file path.
 // Returns a pointer to a DeviceInfo instance with the file path set.
-func Init(filePath string) *DeviceInfo {
+func NewDeviceInfo(filePath string) DeviceInfoInterface {
 	return &DeviceInfo{
 		DeviceInfoFile: filePath,
 	}
@@ -44,8 +51,8 @@ func (d *DeviceInfo) LoadDeviceInfo() error {
 }
 
 // GetDeviceID returns the current device ID from the Config field.
-func (d *DeviceInfo) GetDeviceID() (string, error) {
-	return d.Config.ID, nil
+func (d *DeviceInfo) GetDeviceID() string {
+	return d.Config.ID
 }
 
 // SaveDeviceID updates the device ID in the Config field and writes it back to the file.
