@@ -3,8 +3,17 @@ mqtt:
   client_id: "iot_agent-"
   ca_certificate: "certs/broker.emqx.io-ca.crt"
 
+identity:
+  device_file: "configs/device.json"
+
 services:
+  registration:
+    topic: "iot-registration"
+    enabled: true
+    device_secret_file: "secrets/device_secret_PSK.txt"
+    qos: 2
   heartbeat:
     topic: "iot-heartbeat"
     enabled: true
     interval: 10
+    qos: 1
