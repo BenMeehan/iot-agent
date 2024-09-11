@@ -2,8 +2,8 @@ package identity
 
 import (
 	"encoding/json"
-	"os"
 
+	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/sirupsen/logrus"
 )
 
@@ -12,30 +12,39 @@ type Identity struct {
 	ID string `json:"device_id"`
 }
 
+// DeviceInfoInterface defines the methods that DeviceInfo implements
+type DeviceInfoInterface interface {
+	LoadDeviceInfo() error
+	GetDeviceID() string
+	SaveDeviceID(deviceID string) error
+}
+
 // DeviceInfo manages the device identity and its associated file operations.
 type DeviceInfo struct {
 	DeviceInfoFile string
 	Config         Identity
+	fileOps        file.FileOperations
 }
 
-// Init initializes a new DeviceInfo instance with the specified file path.
-// Returns a pointer to a DeviceInfo instance with the file path set.
-func Init(filePath string) *DeviceInfo {
+// NewDeviceInfo initializes a new DeviceInfo instance with the specified file path and file operations.
+// Returns a pointer to a DeviceInfo instance with the file path and file operations set.
+func NewDeviceInfo(filePath string, fileOps file.FileOperations) DeviceInfoInterface {
 	return &DeviceInfo{
 		DeviceInfoFile: filePath,
+		fileOps:        fileOps,
 	}
 }
 
 // LoadDeviceInfo reads the device information from the file and populates the Config field.
 // Returns an error if reading the file or unmarshalling the JSON fails.
 func (d *DeviceInfo) LoadDeviceInfo() error {
-	data, err := os.ReadFile(d.DeviceInfoFile)
+	data, err := d.fileOps.ReadFile(d.DeviceInfoFile)
 	if err != nil {
 		logrus.WithError(err).Error("failed to read device info file")
 		return err
 	}
 
-	if err := json.Unmarshal(data, &d.Config); err != nil {
+	if err := json.Unmarshal([]byte(data), &d.Config); err != nil {
 		logrus.WithError(err).Error("failed to parse device info from file")
 		return err
 	}
@@ -44,8 +53,8 @@ func (d *DeviceInfo) LoadDeviceInfo() error {
 }
 
 // GetDeviceID returns the current device ID from the Config field.
-func (d *DeviceInfo) GetDeviceID() (string, error) {
-	return d.Config.ID, nil
+func (d *DeviceInfo) GetDeviceID() string {
+	return d.Config.ID
 }
 
 // SaveDeviceID updates the device ID in the Config field and writes it back to the file.
@@ -60,7 +69,7 @@ func (d *DeviceInfo) SaveDeviceID(deviceID string) error {
 		return err
 	}
 
-	if err := os.WriteFile(d.DeviceInfoFile, data, 0644); err != nil {
+	if err := d.fileOps.WriteFile(d.DeviceInfoFile, string(data)); err != nil {
 		logrus.WithError(err).Error("failed to write device info to file")
 		return err
 	}

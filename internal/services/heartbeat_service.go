@@ -2,7 +2,6 @@ package services
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/models"
@@ -13,22 +12,17 @@ import (
 
 // HeartbeatService defines the structure and functionality of the heartbeat service
 type HeartbeatService struct {
-	PubTopic string
-	Interval time.Duration
-	DeviceID string
-	QOS      int
+	PubTopic   string
+	Interval   time.Duration
+	DeviceID   string
+	QOS        int
+	MqttClient mqtt.MQTTClient
 }
 
 const StatusAlive = "1"
 
 // Start initiates the heartbeat service and continuously publishes heartbeat messages to the MQTT broker
 func (h *HeartbeatService) Start() error {
-	client := mqtt.Client()
-	if client == nil {
-		logrus.Error("MQTT client not initialized")
-		return fmt.Errorf("MQTT client not initialized")
-	}
-
 	go func() {
 		for {
 			heartbeatMessage := models.Heartbeat{
@@ -39,15 +33,17 @@ func (h *HeartbeatService) Start() error {
 
 			payload, err := json.Marshal(heartbeatMessage)
 			if err != nil {
-				logrus.WithError(err).Error("Failed to serialize heartbeat message")
+				logrus.WithError(err).Error("failed to serialize heartbeat message")
 				continue
 			}
 
 			// Publish the heartbeat message to the MQTT topic
-			token := client.Publish(h.PubTopic, byte(h.QOS), false, payload)
+			token := h.MqttClient.Publish(h.PubTopic, byte(h.QOS), false, payload)
 			token.Wait()
-			if token.Error() != nil {
-				logrus.WithError(token.Error()).Error("Failed to publish heartbeat")
+
+			if err := token.Error(); err != nil {
+				logrus.WithError(err).Error("failed to publish heartbeat message")
+				continue
 			} else {
 				logrus.WithField("message", heartbeatMessage).Info("Heartbeat published successfully")
 			}

@@ -5,20 +5,33 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/utils"
+	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/elliotchance/orderedmap/v2"
 	"github.com/sirupsen/logrus"
 )
 
+// ServiceRegistryInterface defines methods for registering and starting services.
+type ServiceRegistryInterface interface {
+	RegisterService(name string, svc Service)
+	StartServices()
+	RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface)
+}
+
 // ServiceRegistry manages a collection of services and their startup order
 type ServiceRegistry struct {
-	services *orderedmap.OrderedMap[string, Service]
+	services   *orderedmap.OrderedMap[string, Service]
+	mqttClient mqtt.MQTTClient
+	fileClient file.FileOperations
 }
 
 // NewServiceRegistry initializes and returns a new ServiceRegistry instance
-func NewServiceRegistry() *ServiceRegistry {
+func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations) *ServiceRegistry {
 	return &ServiceRegistry{
-		services: orderedmap.NewOrderedMap[string, Service](),
+		services:   orderedmap.NewOrderedMap[string, Service](),
+		mqttClient: mqttClient,
+		fileClient: fileClient,
 	}
 }
 
@@ -46,8 +59,8 @@ func (sr *ServiceRegistry) StartServices() {
 	}
 }
 
-// RegisterServices registers services based on the provided configuration
-func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo *identity.DeviceInfo) {
+// RegisterServices registers services based on the provided configuration and device information.
+func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface) {
 	serviceConfigs := map[string]func() Service{
 		"registration": func() Service {
 			return &RegistrationService{
@@ -55,15 +68,18 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo *id
 				DeviceSecretFile: config.Services.Registration.DeviceSecretFile,
 				ClientID:         config.MQTT.ClientID,
 				QOS:              config.Services.Registration.QOS,
-				DeviceInfo:       *deviceInfo,
+				DeviceInfo:       deviceInfo,
+				MqttClient:       sr.mqttClient,
+				FileClient:       sr.fileClient,
 			}
 		},
 		"heartbeat": func() Service {
 			return &HeartbeatService{
-				PubTopic: config.Services.Heartbeat.Topic,
-				Interval: time.Duration(config.Services.Heartbeat.Interval) * time.Second,
-				DeviceID: deviceInfo.Config.ID,
-				QOS:      config.Services.Heartbeat.QOS,
+				PubTopic:   config.Services.Heartbeat.Topic,
+				Interval:   time.Duration(config.Services.Heartbeat.Interval) * time.Second,
+				DeviceID:   deviceInfo.GetDeviceID(),
+				QOS:        config.Services.Heartbeat.QOS,
+				MqttClient: sr.mqttClient,
 			}
 		},
 	}
