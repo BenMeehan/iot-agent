@@ -9,6 +9,9 @@ To run the project, use:
 go run cmd/agent/main.go
 ```
 
+## Architecture
+![arch.png](./.github/images/agent-arch.png)
+
 ## Adding a New Service
 
 1. **Update Configuration**:
