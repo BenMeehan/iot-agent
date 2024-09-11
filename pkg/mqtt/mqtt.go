@@ -9,15 +9,30 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-var mqttClient mqtt.Client
+// MQTTClient defines the interface for an MQTT client.
+type MQTTClient interface {
+	Connect() mqtt.Token
+	Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token
+	Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token
+	Disconnect(quiesce uint)
+}
+
+// MqttService provides methods for MQTT operations.
+type MqttService struct {
+	client MQTTClient
+}
+
+// NewMqttService creates a new MqttService instance with the provided client.
+func NewMqttService(client MQTTClient) *MqttService {
+	return &MqttService{client: client}
+}
 
 // Initialize sets up the MQTT client with SSL/TLS and starts the connection.
-// It takes the MQTT broker address, client ID, and path to the CA certificate as arguments.
-func Initialize(broker, clientID, caCertPath string) error {
+func Initialize(broker, clientID, caCertPath string) (*MqttService, error) {
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to read CA certificate")
-		return err
+		return nil, err
 	}
 
 	// Create a CA certificate pool and append the CA certificate to it
@@ -48,17 +63,34 @@ func Initialize(broker, clientID, caCertPath string) error {
 	})
 
 	// Create and connect the MQTT client
-	mqttClient = mqtt.NewClient(opts)
-	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		logrus.WithError(token.Error()).Error("Failed to connect to MQTT broker")
-		return token.Error()
+		return nil, token.Error()
 	}
 
 	logrus.Info("MQTT client initialized and connected")
-	return nil
+	return NewMqttService(client), nil
 }
 
-// Client returns the initialized MQTT client instance.
-func Client() mqtt.Client {
-	return mqttClient
+// Connect connects to the MQTT broker.
+func (s *MqttService) Connect() mqtt.Token {
+	return s.client.Connect()
+}
+
+// Publish sends a message to the specified topic.
+func (s *MqttService) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
+	token := s.client.Publish(topic, qos, retained, payload)
+	return token
+}
+
+// Subscribe subscribes to the specified topic with a message handler.
+func (s *MqttService) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
+	token := s.client.Subscribe(topic, qos, callback)
+	return token
+}
+
+// Disconnect gracefully disconnects the MQTT client.
+func (s *MqttService) Disconnect(quiesce uint) {
+	s.client.Disconnect(quiesce)
 }

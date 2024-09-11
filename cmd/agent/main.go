@@ -2,9 +2,12 @@ package main
 
 import (
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
+	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/google/uuid"
@@ -28,20 +31,23 @@ func main() {
 	logrus.Infof("Using MQTT Client ID: %s", config.MQTT.ClientID)
 
 	// Initialize the shared MQTT connection
-	err = mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CACertificate)
+	mqttClient, err := mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CACertificate)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to initialize MQTT connection")
 	}
 
-	// Load initial device information from the identity service
-	deviceInfo := identity.Init(config.Identity.DeviceFile)
+	// Initialize file operations handler
+	fileClient := file.NewFileService()
+
+	// Initialize DeviceInfo
+	deviceInfo := identity.NewDeviceInfo(config.Identity.DeviceFile, fileClient)
 	err = deviceInfo.LoadDeviceInfo()
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to load device information")
 	}
 
 	// Create a new service registry to manage services
-	serviceRegistry := services.NewServiceRegistry()
+	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient)
 
 	// Register all services based on the configuration
 	serviceRegistry.RegisterServices(config, deviceInfo)
@@ -50,7 +56,11 @@ func main() {
 	serviceRegistry.StartServices()
 	logrus.Info("All services started successfully")
 
-	// Keep the agent running by blocking the main thread
-	logrus.Info("Agent is running and waiting for tasks...")
-	select {}
+	// Handle graceful shutdown
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
+	<-stopCh
+
+	logrus.Info("Shutting down gracefully...")
+	mqttClient.Disconnect(250)
 }
