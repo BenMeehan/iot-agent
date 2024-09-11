@@ -12,6 +12,13 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// ServiceRegistryInterface defines methods for registering and starting services.
+type ServiceRegistryInterface interface {
+	RegisterService(name string, svc Service)
+	StartServices()
+	RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface)
+}
+
 // ServiceRegistry manages a collection of services and their startup order
 type ServiceRegistry struct {
 	services   *orderedmap.OrderedMap[string, Service]
@@ -62,8 +69,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				ClientID:         config.MQTT.ClientID,
 				QOS:              config.Services.Registration.QOS,
 				DeviceInfo:       deviceInfo,
-				mqttClient:       *sr.mqttClient,
-				fileOps:          *sr.fileClient,
+				mqttClient:       sr.mqttClient,
+				fileClient:       sr.fileClient,
 			}
 		},
 		"heartbeat": func() Service {
@@ -72,7 +79,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				Interval:   time.Duration(config.Services.Heartbeat.Interval) * time.Second,
 				DeviceID:   deviceInfo.GetDeviceID(),
 				QOS:        config.Services.Heartbeat.QOS,
-				mqttClient: *sr.mqttClient,
+				mqttClient: sr.mqttClient,
 			}
 		},
 	}

@@ -21,8 +21,8 @@ type RegistrationService struct {
 	ClientID         string
 	QOS              int
 	DeviceInfo       identity.DeviceInfoInterface
-	mqttClient       mqtt.MqttService
-	fileOps          file.FileService
+	mqttClient       *mqtt.MqttService
+	fileClient       *file.FileService
 }
 
 // Start initiates the device registration process
@@ -104,7 +104,7 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 
 // readDeviceSecret reads and returns the device secret from the DeviceSecretFile
 func (rs *RegistrationService) readDeviceSecret() (string, error) {
-	secret, err := rs.fileOps.ReadFile(rs.DeviceSecretFile)
+	secret, err := rs.fileClient.ReadFile(rs.DeviceSecretFile)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to read device secret file")
 		return "", errors.New("failed to read device secret file")

@@ -39,8 +39,8 @@ func main() {
 	// Initialize file operations handler
 	fileClient := file.NewFileService()
 
-	// Initialize DeviceInfo using the interface
-	deviceInfo := identity.NewDeviceInfo(config.Identity.DeviceFile)
+	// Initialize DeviceInfo
+	deviceInfo := identity.NewDeviceInfo(config.Identity.DeviceFile, fileClient)
 	err = deviceInfo.LoadDeviceInfo()
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to load device information")
@@ -62,5 +62,5 @@ func main() {
 	<-stopCh
 
 	logrus.Info("Shutting down gracefully...")
-	mqttClient.Disconnect(250) // Gracefully disconnect MQTT client
+	mqttClient.Disconnect(250)
 }
