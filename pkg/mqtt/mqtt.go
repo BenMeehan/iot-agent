@@ -23,16 +23,17 @@ type MqttService struct {
 }
 
 // NewMqttService creates a new MqttService instance with the provided client.
-func NewMqttService(client MQTTClient) *MqttService {
-	return &MqttService{client: client}
+func NewMqttService() *MqttService {
+	return &MqttService{}
 }
 
 // Initialize sets up the MQTT client with SSL/TLS and starts the connection.
-func Initialize(broker, clientID, caCertPath string) (*MqttService, error) {
+// This method now acts on an existing MqttService instance.
+func (s *MqttService) Initialize(broker, clientID, caCertPath string) error {
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to read CA certificate")
-		return nil, err
+		return err
 	}
 
 	// Create a CA certificate pool and append the CA certificate to it
@@ -62,15 +63,19 @@ func Initialize(broker, clientID, caCertPath string) (*MqttService, error) {
 		logrus.WithError(err).Error("MQTT connection lost")
 	})
 
-	// Create and connect the MQTT client
+	// Create and assign the MQTT client to the service
 	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
+	s.client = client
+
+	// Connect to the MQTT broker using the Connect method
+	token := s.Connect()
+	if token.Wait() && token.Error() != nil {
 		logrus.WithError(token.Error()).Error("Failed to connect to MQTT broker")
-		return nil, token.Error()
+		return token.Error()
 	}
 
 	logrus.Info("MQTT client initialized and connected")
-	return NewMqttService(client), nil
+	return nil
 }
 
 // Connect connects to the MQTT broker.

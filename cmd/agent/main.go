@@ -31,7 +31,8 @@ func main() {
 	logrus.Infof("Using MQTT Client ID: %s", config.MQTT.ClientID)
 
 	// Initialize the shared MQTT connection
-	mqttClient, err := mqtt.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CACertificate)
+	mqttClient := mqtt.NewMqttService()
+	err = mqttClient.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CACertificate)
 	if err != nil {
 		logrus.WithError(err).Fatal("Failed to initialize MQTT connection")
 	}
