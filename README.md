@@ -8,6 +8,11 @@ To run the project, use:
 ```sh
 go run cmd/agent/main.go
 ```
+TODO:
+1. SSH Service
+2. Update Service
+3. Metrics Service
+4. Easier Cross-Compilation for different architectures
 
 ## Architecture
 ![arch.png](./.github/images/agent-arch.png)
