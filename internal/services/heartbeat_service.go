@@ -16,7 +16,7 @@ type HeartbeatService struct {
 	Interval   time.Duration
 	DeviceID   string
 	QOS        int
-	mqttClient mqtt.MqttService
+	mqttClient *mqtt.MqttService
 }
 
 const StatusAlive = "1"
