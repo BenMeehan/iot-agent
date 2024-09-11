@@ -73,24 +73,21 @@ func Initialize(broker, clientID, caCertPath string) (*MqttService, error) {
 	return NewMqttService(client), nil
 }
 
+// Connect connects to the MQTT broker.
+func (s *MqttService) Connect() mqtt.Token {
+	return s.client.Connect()
+}
+
 // Publish sends a message to the specified topic.
-func (s *MqttService) Publish(topic string, qos byte, retained bool, payload interface{}) error {
+func (s *MqttService) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
 	token := s.client.Publish(topic, qos, retained, payload)
-	token.Wait()
-	if token.Error() != nil {
-		return token.Error()
-	}
-	return nil
+	return token
 }
 
 // Subscribe subscribes to the specified topic with a message handler.
-func (s *MqttService) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) error {
+func (s *MqttService) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
 	token := s.client.Subscribe(topic, qos, callback)
-	token.Wait()
-	if token.Error() != nil {
-		return token.Error()
-	}
-	return nil
+	return token
 }
 
 // Disconnect gracefully disconnects the MQTT client.

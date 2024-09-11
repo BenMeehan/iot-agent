@@ -22,12 +22,12 @@ type ServiceRegistryInterface interface {
 // ServiceRegistry manages a collection of services and their startup order
 type ServiceRegistry struct {
 	services   *orderedmap.OrderedMap[string, Service]
-	mqttClient *mqtt.MqttService
-	fileClient *file.FileService
+	mqttClient mqtt.MQTTClient
+	fileClient file.FileOperations
 }
 
 // NewServiceRegistry initializes and returns a new ServiceRegistry instance
-func NewServiceRegistry(mqttClient *mqtt.MqttService, fileClient *file.FileService) *ServiceRegistry {
+func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations) *ServiceRegistry {
 	return &ServiceRegistry{
 		services:   orderedmap.NewOrderedMap[string, Service](),
 		mqttClient: mqttClient,
@@ -69,8 +69,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				ClientID:         config.MQTT.ClientID,
 				QOS:              config.Services.Registration.QOS,
 				DeviceInfo:       deviceInfo,
-				mqttClient:       sr.mqttClient,
-				fileClient:       sr.fileClient,
+				MqttClient:       sr.mqttClient,
+				FileClient:       sr.fileClient,
 			}
 		},
 		"heartbeat": func() Service {
@@ -79,7 +79,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				Interval:   time.Duration(config.Services.Heartbeat.Interval) * time.Second,
 				DeviceID:   deviceInfo.GetDeviceID(),
 				QOS:        config.Services.Heartbeat.QOS,
-				mqttClient: sr.mqttClient,
+				MqttClient: sr.mqttClient,
 			}
 		},
 	}

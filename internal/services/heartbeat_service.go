@@ -16,7 +16,7 @@ type HeartbeatService struct {
 	Interval   time.Duration
 	DeviceID   string
 	QOS        int
-	mqttClient *mqtt.MqttService
+	MqttClient mqtt.MQTTClient
 }
 
 const StatusAlive = "1"
@@ -33,14 +33,17 @@ func (h *HeartbeatService) Start() error {
 
 			payload, err := json.Marshal(heartbeatMessage)
 			if err != nil {
-				logrus.WithError(err).Error("Failed to serialize heartbeat message")
+				logrus.WithError(err).Error("failed to serialize heartbeat message")
 				continue
 			}
 
 			// Publish the heartbeat message to the MQTT topic
-			err = h.mqttClient.Publish(h.PubTopic, byte(h.QOS), false, payload)
-			if err != nil {
-				logrus.WithError(err).Error("Failed to publish heartbeat")
+			token := h.MqttClient.Publish(h.PubTopic, byte(h.QOS), false, payload)
+			token.Wait()
+
+			if err := token.Error(); err != nil {
+				logrus.WithError(err).Error("failed to publish heartbeat message")
+				continue
 			} else {
 				logrus.WithField("message", heartbeatMessage).Info("Heartbeat published successfully")
 			}
