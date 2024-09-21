@@ -77,7 +77,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			return &HeartbeatService{
 				PubTopic:   config.Services.Heartbeat.Topic,
 				Interval:   time.Duration(config.Services.Heartbeat.Interval) * time.Second,
-				DeviceID:   deviceInfo.GetDeviceID(),
+				DeviceInfo: deviceInfo,
 				QOS:        config.Services.Heartbeat.QOS,
 				MqttClient: sr.mqttClient,
 			}

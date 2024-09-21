@@ -2,6 +2,7 @@ package identity
 
 import (
 	"encoding/json"
+	"os"
 
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/sirupsen/logrus"
@@ -36,16 +37,31 @@ func NewDeviceInfo(filePath string, fileOps file.FileOperations) DeviceInfoInter
 }
 
 // LoadDeviceInfo reads the device information from the file and populates the Config field.
-// Returns an error if reading the file or unmarshalling the JSON fails.
+// If the file does not exist or is empty, it initializes the Config to default (empty) values.
 func (d *DeviceInfo) LoadDeviceInfo() error {
+	// Read the device info file
 	data, err := d.fileOps.ReadFile(d.DeviceInfoFile)
 	if err != nil {
-		logrus.WithError(err).Error("failed to read device info file")
+		if os.IsNotExist(err) {
+			// File does not exist, initialize with default empty values
+			logrus.Warnf("Device info file does not exist: %s, initializing with default values", d.DeviceInfoFile)
+			d.Config = Identity{}
+			return nil
+		}
+		logrus.WithError(err).Error("Failed to read device info file")
 		return err
 	}
 
+	// Check if the file content is empty
+	if len(data) == 0 {
+		logrus.Warnf("Device info file is empty: %s, initializing with default values", d.DeviceInfoFile)
+		d.Config = Identity{}
+		return nil
+	}
+
+	// Attempt to unmarshal the JSON content into the Config field
 	if err := json.Unmarshal([]byte(data), &d.Config); err != nil {
-		logrus.WithError(err).Error("failed to parse device info from file")
+		logrus.WithError(err).Error("Failed to parse device info from file")
 		return err
 	}
 
