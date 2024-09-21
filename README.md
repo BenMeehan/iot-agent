@@ -1,6 +1,6 @@
 # IoT Agent
 
-An IoT agent designed to be modular and configurable, supporting a variety of services.
+A generalized IoT agent designed to be modular, configurable, supporting a variety of services and designed to run on any unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.  
 
 ## Running the Project
 
@@ -8,6 +8,11 @@ To run the project, use:
 ```sh
 go run cmd/agent/main.go
 ```
+TODO:
+1. SSH Service
+2. Update Service
+3. Metrics Service
+4. Easier Cross-Compilation for different architectures
 
 ## Architecture
 ![arch.png](./.github/images/agent-arch.png)
