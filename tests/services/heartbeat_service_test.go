@@ -13,6 +13,10 @@ import (
 func TestHeartbeatService_Start(t *testing.T) {
 	mockMQTTClient := new(mocks.MockMQTTClient)
 	mockToken := new(mocks.MockToken)
+	mockDeviceInfo := new(mocks.MockDeviceInfo)
+
+	mockDeviceInfo.On("GetDeviceID").Return("")
+	mockDeviceInfo.On("SaveDeviceID", "device123").Return(nil)
 
 	mockMQTTClient.On("Publish", "iot-heartbeat", byte(1), false, mock.Anything).Return(mockToken)
 	mockToken.On("Error").Return(nil)
@@ -21,7 +25,7 @@ func TestHeartbeatService_Start(t *testing.T) {
 	service := &services.HeartbeatService{
 		PubTopic:   "iot-heartbeat",
 		Interval:   1 * time.Second,
-		DeviceID:   "device123",
+		DeviceInfo: mockDeviceInfo,
 		QOS:        1,
 		MqttClient: mockMQTTClient,
 	}

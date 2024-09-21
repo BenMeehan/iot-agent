@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/models"
+	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 
 	"github.com/sirupsen/logrus"
@@ -14,7 +15,7 @@ import (
 type HeartbeatService struct {
 	PubTopic   string
 	Interval   time.Duration
-	DeviceID   string
+	DeviceInfo identity.DeviceInfoInterface
 	QOS        int
 	MqttClient mqtt.MQTTClient
 }
@@ -26,7 +27,7 @@ func (h *HeartbeatService) Start() error {
 	go func() {
 		for {
 			heartbeatMessage := models.Heartbeat{
-				DeviceID:  h.DeviceID,
+				DeviceID:  h.DeviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
 				Status:    StatusAlive,
 			}
