@@ -24,6 +24,7 @@ type RegistrationService struct {
 	DeviceInfo       identity.DeviceInfoInterface
 	MqttClient       mqtt.MQTTClient
 	FileClient       file.FileOperations
+	Logger            *logrus.Logger
 }
 
 // Start initiates the device registration process
@@ -31,7 +32,7 @@ func (rs *RegistrationService) Start() error {
 	// Check if device ID is already present
 	existingDeviceID := rs.DeviceInfo.GetDeviceID()
 	if existingDeviceID != "" {
-		logrus.Infof("Device %s already registered with ID: %s", rs.ClientID, existingDeviceID)
+		rs.Logger.Infof("Device %s already registered with ID: %s", rs.ClientID, existingDeviceID)
 		return nil
 	}
 
@@ -55,7 +56,7 @@ func (rs *RegistrationService) Start() error {
 	token := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, payloadBytes)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		logrus.WithError(err).Error("failed to publish registration message")
+		rs.Logger.WithError(err).Error("failed to publish registration message")
 		return err
 	}
 
@@ -65,13 +66,13 @@ func (rs *RegistrationService) Start() error {
 	// Wait for the response or timeout
 	select {
 	case deviceID := <-responseChannel:
-		logrus.Infof("Device %s registered successfully with ID: %s", rs.ClientID, deviceID)
+		rs.Logger.Infof("Device %s registered successfully with ID: %s", rs.ClientID, deviceID)
 		if err := rs.DeviceInfo.SaveDeviceID(deviceID); err != nil {
-			logrus.WithError(err).Error("Failed to save device ID to file")
+			rs.Logger.WithError(err).Error("Failed to save device ID to file")
 			return err
 		}
 	case <-time.After(10 * time.Second):
-		logrus.Errorf("Registration timeout for client: %s, no response received", rs.ClientID)
+		rs.Logger.Errorf("Registration timeout for client: %s, no response received", rs.ClientID)
 		return fmt.Errorf("registration timeout for client: %s, no response received", rs.ClientID)
 	}
 
@@ -81,20 +82,20 @@ func (rs *RegistrationService) Start() error {
 // waitForRegistrationResponse listens for the device registration response
 func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<- string) {
 	respTopic := rs.PubTopic + "/response/" + rs.ClientID
-	logrus.Infof("Listening for registration response on topic: %s", respTopic)
+	rs.Logger.Infof("Listening for registration response on topic: %s", respTopic)
 
 	// Subscribe to the unique response topic
 	token := rs.MqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
 		var response map[string]string
 		err := json.Unmarshal(msg.Payload(), &response)
 		if err != nil {
-			logrus.WithError(err).Error("Error parsing registration response")
+			rs.Logger.WithError(err).Error("Error parsing registration response")
 			return
 		}
 
 		deviceID, exists := response["device_id"]
 		if !exists {
-			logrus.Error("Device ID not found in the registration response")
+			rs.Logger.Error("Device ID not found in the registration response")
 			return
 		}
 
@@ -104,7 +105,7 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 
 	token.Wait()
 	if err := token.Error(); err != nil {
-		logrus.WithError(err).Error("Failed to subscribe to registration response topic")
+		rs.Logger.WithError(err).Error("Failed to subscribe to registration response topic")
 		return
 	}
 }
@@ -113,7 +114,7 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 func (rs *RegistrationService) readDeviceSecret() (string, error) {
 	secret, err := rs.FileClient.ReadFile(rs.DeviceSecretFile)
 	if err != nil {
-		logrus.WithError(err).Error("Failed to read device secret file")
+		rs.Logger.WithError(err).Error("Failed to read device secret file")
 		return "", errors.New("failed to read device secret file")
 	}
 
