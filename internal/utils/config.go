@@ -34,17 +34,25 @@ type Config struct {
 			Interval int    `yaml:"interval"` // Interval between heartbeats (in seconds)
 			QOS      int    `yaml:"qos"`      // MQTT QoS level for heartbeat messages
 		} `yaml:"heartbeat"`
+
+		Metrics struct {
+			Topic             string `yaml:"topic"`               // MQTT topic for metrics service
+			Enabled           bool   `yaml:"enabled"`             // Enable/disable metrics service
+			MetricsConfigFile string `yaml:"metrics_config_file"` // Path to the metrics configuration file
+			Interval          int    `yaml:"interval"`            // Interval for sending metrics (in seconds)
+			QOS               int    `yaml:"qos"`                 // MQTT QoS level for metrics messages
+		} `yaml:"metrics"`
 	} `yaml:"services"`
 }
 
 // LoadConfig loads the YAML configuration from the specified file.
 // It returns a pointer to the Config struct and an error if loading fails.
-func LoadConfig(filename string) (*Config, error) {
-	logrus.Infof("Loading configuration from file: %s", filename)
+func LoadConfig(filename string, logger *logrus.Logger) (*Config, error) {
+	logger.Infof("Loading configuration from file: %s", filename)
 
 	file, err := os.Open(filename)
 	if err != nil {
-		logrus.Errorf("Failed to open config file: %v", err)
+		logger.Errorf("Failed to open config file: %v", err)
 		return nil, err
 	}
 	defer file.Close()
@@ -54,10 +62,10 @@ func LoadConfig(filename string) (*Config, error) {
 	decoder := yaml.NewDecoder(file)
 	err = decoder.Decode(&config)
 	if err != nil {
-		logrus.Errorf("Failed to decode config file: %v", err)
+		logger.Errorf("Failed to decode config file: %v", err)
 		return nil, err
 	}
 
-	logrus.Infof("Configuration loaded successfully from %s", filename)
+	logger.Infof("Configuration loaded successfully from %s", filename)
 	return &config, nil
 }

@@ -17,3 +17,9 @@ services:
     enabled: true
     interval: 10
     qos: 1
+  metrics:
+    topic: "iot-metrics"
+    metrics_config_file: "configs/metrics.json"
+    enabled: true
+    interval: 10
+    qos: 1

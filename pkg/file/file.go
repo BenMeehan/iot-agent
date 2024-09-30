@@ -1,6 +1,10 @@
 package file
 
-import "os"
+import (
+	"os"
+
+	"github.com/sirupsen/logrus"
+)
 
 // FileOperations defines methods for reading from and writing to files.
 type FileOperations interface {
@@ -9,11 +13,15 @@ type FileOperations interface {
 }
 
 // FileService implements the FileOperations interface using standard file operations.
-type FileService struct{}
+type FileService struct{
+	Logger *logrus.Logger
+}
 
 // NewFileService creates a new instance of FileService.
-func NewFileService() *FileService {
-	return &FileService{}
+func NewFileService(logger *logrus.Logger) *FileService {
+	return &FileService{
+		Logger: logger,
+	}
 }
 
 // ReadFile reads the contents of the file at filePath and returns it as a string.
