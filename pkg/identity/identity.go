@@ -25,14 +25,16 @@ type DeviceInfo struct {
 	DeviceInfoFile string
 	Config         Identity
 	fileOps        file.FileOperations
+	Logger *logrus.Logger
 }
 
 // NewDeviceInfo initializes a new DeviceInfo instance with the specified file path and file operations.
 // Returns a pointer to a DeviceInfo instance with the file path and file operations set.
-func NewDeviceInfo(filePath string, fileOps file.FileOperations) DeviceInfoInterface {
+func NewDeviceInfo(filePath string, fileOps file.FileOperations, logger *logrus.Logger) DeviceInfoInterface {
 	return &DeviceInfo{
 		DeviceInfoFile: filePath,
 		fileOps:        fileOps,
+		Logger: logger,
 	}
 }
 
@@ -44,24 +46,24 @@ func (d *DeviceInfo) LoadDeviceInfo() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File does not exist, initialize with default empty values
-			logrus.Warnf("Device info file does not exist: %s, initializing with default values", d.DeviceInfoFile)
+			d.Logger.Warnf("Device info file does not exist: %s, initializing with default values", d.DeviceInfoFile)
 			d.Config = Identity{}
 			return nil
 		}
-		logrus.WithError(err).Error("Failed to read device info file")
+		d.Logger.WithError(err).Error("Failed to read device info file")
 		return err
 	}
 
 	// Check if the file content is empty
 	if len(data) == 0 {
-		logrus.Warnf("Device info file is empty: %s, initializing with default values", d.DeviceInfoFile)
+		d.Logger.Warnf("Device info file is empty: %s, initializing with default values", d.DeviceInfoFile)
 		d.Config = Identity{}
 		return nil
 	}
 
 	// Attempt to unmarshal the JSON content into the Config field
 	if err := json.Unmarshal([]byte(data), &d.Config); err != nil {
-		logrus.WithError(err).Error("Failed to parse device info from file")
+		d.Logger.WithError(err).Error("Failed to parse device info from file")
 		return err
 	}
 
@@ -81,12 +83,12 @@ func (d *DeviceInfo) SaveDeviceID(deviceID string) error {
 
 	data, err := json.Marshal(d.Config)
 	if err != nil {
-		logrus.WithError(err).Error("failed to serialize device info")
+		d.Logger.WithError(err).Error("failed to serialize device info")
 		return err
 	}
 
 	if err := d.fileOps.WriteFile(d.DeviceInfoFile, string(data)); err != nil {
-		logrus.WithError(err).Error("failed to write device info to file")
+		d.Logger.WithError(err).Error("failed to write device info to file")
 		return err
 	}
 

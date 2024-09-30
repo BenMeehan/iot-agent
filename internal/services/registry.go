@@ -24,25 +24,27 @@ type ServiceRegistry struct {
 	services   *orderedmap.OrderedMap[string, Service]
 	mqttClient mqtt.MQTTClient
 	fileClient file.FileOperations
+	Logger     *logrus.Logger
 }
 
 // NewServiceRegistry initializes and returns a new ServiceRegistry instance
-func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations) *ServiceRegistry {
+func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger *logrus.Logger) *ServiceRegistry {
 	return &ServiceRegistry{
 		services:   orderedmap.NewOrderedMap[string, Service](),
 		mqttClient: mqttClient,
 		fileClient: fileClient,
+		Logger:     logger,
 	}
 }
 
 // RegisterService adds a service to the registry and maintains the order of registration
 func (sr *ServiceRegistry) RegisterService(name string, svc Service) {
 	if _, exists := sr.services.Get(name); exists {
-		logrus.Warnf("Service %s is already registered", name)
+		sr.Logger.Warnf("Service %s is already registered", name)
 		return
 	}
 	sr.services.Set(name, svc)
-	logrus.Infof("Registered service: %s", name)
+	sr.Logger.Infof("Registered service: %s", name)
 }
 
 // StartServices starts all registered services in the order they were added
@@ -51,9 +53,9 @@ func (sr *ServiceRegistry) StartServices() {
 		name := el.Key
 		svc := el.Value
 
-		logrus.Infof("Starting service: %s", name)
+		sr.Logger.Infof("Starting service: %s", name)
 		if err := svc.Start(); err != nil {
-			logrus.WithError(err).Errorf("Failed to start service: %s", name)
+			sr.Logger.WithError(err).Errorf("Failed to start service: %s", name)
 			os.Exit(1)
 		}
 	}
@@ -71,6 +73,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				DeviceInfo:       deviceInfo,
 				MqttClient:       sr.mqttClient,
 				FileClient:       sr.fileClient,
+				Logger:           sr.Logger,
 			}
 		},
 		"heartbeat": func() Service {
@@ -80,6 +83,19 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				DeviceInfo: deviceInfo,
 				QOS:        config.Services.Heartbeat.QOS,
 				MqttClient: sr.mqttClient,
+				Logger:     sr.Logger,
+			}
+		},
+		"metrics": func() Service {
+			return &MetricsService{
+				PubTopic:          config.Services.Metrics.Topic,
+				MetricsConfigFile: config.Services.Metrics.MetricsConfigFile,
+				Interval:          time.Duration(config.Services.Metrics.Interval) * time.Second,
+				DeviceInfo:        deviceInfo,
+				QOS:               config.Services.Metrics.QOS,
+				MqttClient:        sr.mqttClient,
+				FileClient:        sr.fileClient,
+				Logger:            sr.Logger,
 			}
 		},
 	}
@@ -89,12 +105,17 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 		case "registration":
 			if config.Services.Registration.Enabled {
 				sr.RegisterService(name, createService())
-				logrus.Infof("%s service registered", name)
+				sr.Logger.Infof("%s service registered", name)
 			}
 		case "heartbeat":
 			if config.Services.Heartbeat.Enabled {
 				sr.RegisterService(name, createService())
-				logrus.Infof("%s service registered", name)
+				sr.Logger.Infof("%s service registered", name)
+			}
+		case "metrics":
+			if config.Services.Metrics.Enabled {
+				sr.RegisterService(name, createService())
+				sr.Logger.Infof("%s service registered", name)
 			}
 		}
 	}

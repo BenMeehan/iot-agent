@@ -16,52 +16,55 @@ import (
 
 func main() {
 	// Set up structured logging with JSON output
-	logrus.SetFormatter(&logrus.JSONFormatter{})
-	logrus.SetOutput(os.Stdout)
-	logrus.SetLevel(logrus.InfoLevel)
+	var log = &logrus.Logger{
+		Out: os.Stdout,
+		Formatter: new(logrus.JSONFormatter),
+		Hooks: make(logrus.LevelHooks),
+		Level: logrus.InfoLevel,
+	}
 
 	// Load configuration from file
-	config, err := utils.LoadConfig("configs/config.yaml")
+	config, err := utils.LoadConfig("configs/config.yaml", log)
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to load configuration")
+		log.WithError(err).Fatal("Failed to load configuration")
 	}
 
 	// Generate a unique MQTT Client ID by appending a UUID
 	config.MQTT.ClientID = config.MQTT.ClientID + "-" + uuid.New().String()
-	logrus.Infof("Using MQTT Client ID: %s", config.MQTT.ClientID)
+	log.Infof("Using MQTT Client ID: %s", config.MQTT.ClientID)
 
 	// Initialize the shared MQTT connection
-	mqttClient := mqtt.NewMqttService()
+	mqttClient := mqtt.NewMqttService(log)
 	err = mqttClient.Initialize(config.MQTT.Broker, config.MQTT.ClientID, config.MQTT.CACertificate)
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to initialize MQTT connection")
+		log.WithError(err).Fatal("Failed to initialize MQTT connection")
 	}
 
 	// Initialize file operations handler
-	fileClient := file.NewFileService()
+	fileClient := file.NewFileService(log)
 
 	// Initialize DeviceInfo
-	deviceInfo := identity.NewDeviceInfo(config.Identity.DeviceFile, fileClient)
+	deviceInfo := identity.NewDeviceInfo(config.Identity.DeviceFile, fileClient, log)
 	err = deviceInfo.LoadDeviceInfo()
 	if err != nil {
-		logrus.WithError(err).Fatal("Failed to load device information")
+		log.WithError(err).Fatal("Failed to load device information")
 	}
 
 	// Create a new service registry to manage services
-	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient)
+	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient, log)
 
 	// Register all services based on the configuration
 	serviceRegistry.RegisterServices(config, deviceInfo)
 
 	// Start all registered services in the registry
 	serviceRegistry.StartServices()
-	logrus.Info("All services started successfully")
+	log.Info("All services started successfully")
 
 	// Handle graceful shutdown
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
 	<-stopCh
 
-	logrus.Info("Shutting down gracefully...")
+	log.Info("Shutting down gracefully...")
 	mqttClient.Disconnect(250)
 }
