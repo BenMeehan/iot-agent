@@ -25,7 +25,7 @@ type DeviceInfo struct {
 	DeviceInfoFile string
 	Config         Identity
 	fileOps        file.FileOperations
-	Logger *logrus.Logger
+	Logger         *logrus.Logger
 }
 
 // NewDeviceInfo initializes a new DeviceInfo instance with the specified file path and file operations.
@@ -34,7 +34,7 @@ func NewDeviceInfo(filePath string, fileOps file.FileOperations, logger *logrus.
 	return &DeviceInfo{
 		DeviceInfoFile: filePath,
 		fileOps:        fileOps,
-		Logger: logger,
+		Logger:         logger,
 	}
 }
 

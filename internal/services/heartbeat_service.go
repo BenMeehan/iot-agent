@@ -18,7 +18,7 @@ type HeartbeatService struct {
 	DeviceInfo identity.DeviceInfoInterface
 	QOS        int
 	MqttClient mqtt.MQTTClient
-	Logger            *logrus.Logger
+	Logger     *logrus.Logger
 }
 
 const StatusAlive = "1"
@@ -26,7 +26,7 @@ const StatusAlive = "1"
 // Start initiates the heartbeat service and continuously publishes heartbeat messages to the MQTT broker
 func (h *HeartbeatService) Start() error {
 	go func() {
-		for {
+		for range time.Tick(h.Interval) {
 			heartbeatMessage := models.Heartbeat{
 				DeviceID:  h.DeviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
@@ -49,9 +49,6 @@ func (h *HeartbeatService) Start() error {
 			} else {
 				h.Logger.WithField("message", heartbeatMessage).Info("Heartbeat published successfully")
 			}
-
-			// Sleep for the specified interval before sending the next heartbeat
-			time.Sleep(h.Interval)
 		}
 	}()
 
