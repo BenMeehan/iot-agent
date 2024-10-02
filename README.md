@@ -65,3 +65,4 @@ TODO:
 ## URLs
 
 - [EMQX Public MQTT5 Broker](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
+- [MQTT Test Client](https://testclient-cloud.mqtt.cool/)
