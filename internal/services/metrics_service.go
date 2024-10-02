@@ -61,48 +61,35 @@ func (m *MetricsService) LoadMetricsConfig() (*MetricsConfig, error) {
 
 // CollectMetrics gathers system and process metrics based on the config, including timestamps
 func (m *MetricsService) CollectMetrics(config *MetricsConfig) *models.SystemMetrics {
+	// Create a new SystemMetrics struct and assign the current timestamp
 	metrics := &models.SystemMetrics{
+		Timestamp: time.Now().UTC(),
 		Processes: make(map[string]*models.ProcessMetrics),
 	}
 
-	// Get the current timestamp
-	timestamp := time.Now().UTC()
-
 	// Collect CPU usage
 	if config.MonitorCPU {
-		metrics.CPUUsage = &models.TimestampedMetric{
-			Value:     m.getCPUUsage(),
-			Timestamp: timestamp,
-		}
+		metrics.CPUUsage = m.getCPUUsage()
 	}
 
 	// Collect memory usage
 	if config.MonitorMemory {
-		metrics.Memory = &models.TimestampedMetric{
-			Value:     m.getMemoryStats(),
-			Timestamp: timestamp,
-		}
+		metrics.Memory = m.getMemoryStats()
 	}
 
 	// Collect disk usage
 	if config.MonitorDisk {
-		metrics.Disk = &models.TimestampedMetric{
-			Value:     m.getDiskUsage(),
-			Timestamp: timestamp,
-		}
+		metrics.Disk = m.getDiskUsage()
 	}
 
 	// Collect network usage
 	if config.MonitorNetwork {
-		metrics.Network = &models.TimestampedMetric{
-			Value:     m.getNetworkStats(),
-			Timestamp: timestamp,
-		}
+		metrics.Network = m.getNetworkStats()
 	}
 
 	// Collect process metrics
 	if len(config.ProcessNames) > 0 {
-		m.getProcessMetrics(config, metrics, timestamp)
+		m.getProcessMetrics(config, metrics)
 	}
 
 	m.Logger.WithFields(logrus.Fields{
@@ -153,55 +140,46 @@ func (m *MetricsService) Start() error {
 
 // Helper functions to gather individual metrics
 
-func (m *MetricsService) getCPUUsage() float64 {
+func (m *MetricsService) getCPUUsage() *float64 {
 	cpuPercentages, err := cpu.Percent(0, false)
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get CPU usage")
-		return 0
+		return nil
 	}
-	return cpuPercentages[0]
+	return &cpuPercentages[0]
 }
 
-func (m *MetricsService) getMemoryStats() map[string]interface{} {
+func (m *MetricsService) getMemoryStats() *float64 {
 	memStats, err := mem.VirtualMemory()
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get memory stats")
 		return nil
 	}
-	return map[string]interface{}{
-		"total":        memStats.Total,
-		"used":         memStats.Used,
-		"used_percent": memStats.UsedPercent,
-	}
+	return &memStats.UsedPercent
 }
 
-func (m *MetricsService) getDiskUsage() map[string]interface{} {
+func (m *MetricsService) getDiskUsage() *float64 {
 	diskStats, err := disk.Usage("/")
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get disk usage")
 		return nil
 	}
-	return map[string]interface{}{
-		"total":        diskStats.Total,
-		"used":         diskStats.Used,
-		"used_percent": diskStats.UsedPercent,
-	}
+	return &diskStats.UsedPercent
 }
 
-func (m *MetricsService) getNetworkStats() map[string]interface{} {
+func (m *MetricsService) getNetworkStats() *float64 {
 	netStats, err := net.IOCounters(false)
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get network stats")
 		return nil
 	}
-	return map[string]interface{}{
-		"bytes_sent": netStats[0].BytesSent,
-		"bytes_recv": netStats[0].BytesRecv,
-	}
+	// Convert uint64 to float64 for compatibility
+	bytesRecv := float64(netStats[0].BytesRecv)
+	return &bytesRecv
 }
 
 // getProcessMetrics gathers metrics for all processes specified in the config
-func (m *MetricsService) getProcessMetrics(config *MetricsConfig, metrics *models.SystemMetrics, timestamp time.Time) {
+func (m *MetricsService) getProcessMetrics(config *MetricsConfig, metrics *models.SystemMetrics) {
 	procs, err := process.Processes()
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get process metrics")
@@ -221,18 +199,12 @@ func (m *MetricsService) getProcessMetrics(config *MetricsConfig, metrics *model
 
 				// Collect process CPU usage
 				if config.MonitorProcCPU {
-					procMetrics.CPUUsage = &models.TimestampedMetric{
-						Value:     m.getProcessCPU(proc),
-						Timestamp: timestamp,
-					}
+					procMetrics.CPUUsage = m.getProcessCPU(proc)
 				}
 
 				// Collect process memory usage
 				if config.MonitorProcMem {
-					procMetrics.Memory = &models.TimestampedMetric{
-						Value:     m.getProcessMemory(proc),
-						Timestamp: timestamp,
-					}
+					procMetrics.Memory = m.getProcessMemory(proc)
 				}
 
 				metrics.Processes[procName] = procMetrics
@@ -242,23 +214,22 @@ func (m *MetricsService) getProcessMetrics(config *MetricsConfig, metrics *model
 	}
 }
 
-func (m *MetricsService) getProcessCPU(p *process.Process) float64 {
+func (m *MetricsService) getProcessCPU(p *process.Process) *float64 {
 	procCPU, err := p.CPUPercent()
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get process CPU usage")
-		return 0
+		return nil
 	}
-	return procCPU
+	return &procCPU
 }
 
-func (m *MetricsService) getProcessMemory(p *process.Process) map[string]interface{} {
+func (m *MetricsService) getProcessMemory(p *process.Process) *float64 {
 	procMem, err := p.MemoryInfo()
 	if err != nil {
 		m.Logger.WithError(err).Error("Failed to get process memory usage")
 		return nil
 	}
-	return map[string]interface{}{
-		"rss": procMem.RSS,
-		"vms": procMem.VMS,
-	}
+	// Returning RSS memory as an example
+	rss := float64(procMem.RSS)
+	return &rss
 }
