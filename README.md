@@ -1,7 +1,3 @@
-Here's an updated version of your README, incorporating the Metrics Service into the documentation:
-
----
-
 # IoT Agent
 
 A generalized IoT agent designed to be modular, configurable, supporting a variety of services, and designed to run on any Unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.
@@ -80,11 +76,3 @@ TODO:
 
 - [EMQX Public MQTT5 Broker](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
 - [MQTT Test Client](https://testclient-cloud.mqtt.cool/)
-
---- 
-
-### Changes Made:
-- Added a **Metrics Service** section under the Services Overview to explain its purpose, configuration parameters, and behavior.
-- Ensured consistency with the existing services in terms of format and clarity.
-
-Feel free to adjust any specifics based on your project's requirements or additional details you'd like to include!
