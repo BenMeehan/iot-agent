@@ -3,7 +3,7 @@
   "monitor_memory": true,
   "monitor_disk": true,
   "monitor_network": true,
-  "process_names": ["process1", "process2"],
+  "process_names": ["chrome.exe", "Code.exe"],
   "monitor_proc_cpu": true,
   "monitor_proc_mem": true
 }

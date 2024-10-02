@@ -2,24 +2,19 @@ package models
 
 import "time"
 
-// TimestampedMetric wraps a metric value with its associated timestamp
-type TimestampedMetric struct {
-	Value     interface{} `json:"value"`
-	Timestamp time.Time   `json:"timestamp"`
-}
-
-// SystemMetrics represents all the system metrics collected at a specific time
+// SystemMetrics represents the system metrics collected at a specific time
 type SystemMetrics struct {
-	CPUUsage  *TimestampedMetric         `json:"cpu_usage,omitempty"`
-	Memory    *TimestampedMetric         `json:"memory,omitempty"`
-	Disk      *TimestampedMetric         `json:"disk,omitempty"`
-	Network   *TimestampedMetric         `json:"network,omitempty"`
+	Timestamp time.Time                  `json:"timestamp"`
+	DeviceID  string                     `json:"device_id"`
+	CPUUsage  *float64                   `json:"cpu_usage,omitempty"`
+	Memory    *float64                   `json:"memory,omitempty"`
+	Disk      *float64                   `json:"disk,omitempty"`
+	Network   *float64                   `json:"network,omitempty"`
 	Processes map[string]*ProcessMetrics `json:"processes,omitempty"`
-	DeviceID  string                     `json:"deviceid"`
 }
 
 // ProcessMetrics contains metrics for an individual process
 type ProcessMetrics struct {
-	CPUUsage *TimestampedMetric `json:"cpu_usage,omitempty"`
-	Memory   *TimestampedMetric `json:"memory,omitempty"`
+	CPUUsage *float64 `json:"cpu_usage,omitempty"`
+	Memory   *float64 `json:"memory,omitempty"`
 }

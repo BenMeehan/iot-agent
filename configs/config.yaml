@@ -9,12 +9,12 @@ identity:
 services:
   registration:
     topic: "iot-registration"
-    enabled: true
+    enabled: false
     device_secret_file: "secrets/.device.secret.PSK.txt"
     qos: 2
   heartbeat:
     topic: "iot-heartbeat"
-    enabled: true
+    enabled: false
     interval: 10
     qos: 1
   metrics:
