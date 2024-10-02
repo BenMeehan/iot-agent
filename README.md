@@ -1,6 +1,10 @@
+Here's an updated version of your README, incorporating the Metrics Service into the documentation:
+
+---
+
 # IoT Agent
 
-A generalized IoT agent designed to be modular, configurable, supporting a variety of services and designed to run on any unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.  
+A generalized IoT agent designed to be modular, configurable, supporting a variety of services, and designed to run on any Unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.
 
 ## Running the Project
 
@@ -11,7 +15,7 @@ go run cmd/agent/main.go
 TODO:
 1. SSH Service
 2. Update Service
-3. Metrics Service
+3. **Metrics Service**
 4. Easier Cross-Compilation for different architectures
 
 ## Architecture
@@ -24,7 +28,7 @@ TODO:
 
 2. **Create Service Logic**:
    - Add a new file in `internal/services` (e.g., `new_service.go`).
-   - Implement the service logic similar to existing services (e.g., `heartbeatService.go`).
+   - Implement the service logic similar to existing services (e.g., `heartbeat_service.go`).
 
 ## Services Overview
 
@@ -36,7 +40,7 @@ TODO:
   - `DeviceSecretFile`: Path to the file containing device secrets.
   - `ClientID`: The unique client identifier used for MQTT communication.
   - `QOS`: Quality of Service level for MQTT messages.
-- **Behavior**: Publishes registration data to the MQTT broker to register the device. If the device.json file contains a deviceID then, the device is already registered and we use that. Else, we do a secure registration through a PSK hash for authentication.
+- **Behavior**: Publishes registration data to the MQTT broker to register the device. If the `device.json` file contains a `deviceID`, then the device is already registered, and we use that. Otherwise, we do a secure registration through a PSK hash for authentication.
 
 ### Heartbeat Service
 
@@ -47,6 +51,16 @@ TODO:
   - `DeviceID`: The unique identifier for the device.
   - `QOS`: Quality of Service level for MQTT messages.
 - **Behavior**: Sends heartbeat messages at regular intervals to the MQTT broker to indicate that the device is still operational.
+
+### Metrics Service
+
+- **Purpose**: Collects and sends system and process metrics from the IoT device to a backend for monitoring and analysis.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish metrics data.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `Interval`: The interval in seconds to collect metrics (if applicable).
+  - `DeviceID`: The unique identifier for the device.
+- **Behavior**: Collects metrics such as CPU usage, memory, disk space, and network usage, along with specific process metrics. The service publishes this data to the configured MQTT broker at regular intervals or upon changes. Metrics are configurable through a json file.
 
 ## Rules
 
@@ -66,3 +80,11 @@ TODO:
 
 - [EMQX Public MQTT5 Broker](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
 - [MQTT Test Client](https://testclient-cloud.mqtt.cool/)
+
+--- 
+
+### Changes Made:
+- Added a **Metrics Service** section under the Services Overview to explain its purpose, configuration parameters, and behavior.
+- Ensured consistency with the existing services in terms of format and clarity.
+
+Feel free to adjust any specifics based on your project's requirements or additional details you'd like to include!
