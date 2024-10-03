@@ -2,6 +2,8 @@
 
 A generalized IoT agent designed to be modular, configurable, supporting a variety of services, and designed to run on any Unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.
 
+Pre-Alpha Discussions: [Here](https://github.com/BenMeehan/iot-agent/discussions/6)
+
 ## Running the Project
 
 To run the project, use:
