@@ -42,6 +42,14 @@ type Config struct {
 			Interval          int    `yaml:"interval"`            // Interval for sending metrics (in seconds)
 			QOS               int    `yaml:"qos"`                 // MQTT QoS level for metrics messages
 		} `yaml:"metrics"`
+
+		Command struct {
+			Topic            string `yaml:"topic"`              // MQTT topic for command service
+			Enabled          bool   `yaml:"enabled"`            // Enable/disable command service
+			OutputSizeLimit  int    `yaml:"output_size_limit"`  // Maximum size of command output in bytes
+			MaxExecutionTime int    `yaml:"max_execution_time"` // Maximum execution time for commands (in seconds)
+			QOS              int    `yaml:"qos"`                // MQTT QoS level for command service messages
+		} `yaml:"command_service"`
 	} `yaml:"services"`
 }
 
