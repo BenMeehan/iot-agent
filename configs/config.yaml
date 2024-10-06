@@ -20,6 +20,12 @@ services:
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
-    enabled: true
+    enabled: false
     interval: 10
     qos: 1
+  command_service:
+    topic: "iot-commands"
+    qos: 1
+    output_size_limit: 1024  
+    max_execution_time: 10 
+    enabled: true
