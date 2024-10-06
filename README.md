@@ -13,7 +13,7 @@ go run cmd/agent/main.go
 TODO:
 1. SSH Service
 2. Update Service
-3. **Metrics Service**
+3. Auth Service
 4. Easier Cross-Compilation for different architectures
 
 ## Architecture
