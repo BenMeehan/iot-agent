@@ -58,7 +58,18 @@ TODO:
   - `QOS`: Quality of Service level for MQTT messages.
   - `Interval`: The interval in seconds to collect metrics (if applicable).
   - `DeviceID`: The unique identifier for the device.
-- **Behavior**: Collects metrics such as CPU usage, memory, disk space, and network usage, along with specific process metrics. The service publishes this data to the configured MQTT broker at regular intervals or upon changes. Metrics are configurable through a json file.
+- **Behavior**: Collects metrics such as CPU usage, memory, disk space, and network usage, along with specific process metrics. The service publishes this data to the configured MQTT broker at regular intervals or upon changes. Metrics are configurable through a JSON file.
+
+### Command Service
+
+- **Purpose**: Executes commands on the IoT device and publishes the output to the MQTT broker.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish command execution results.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `OutputSizeLimit`: Maximum size of the output from the executed command in bytes.
+  - `MaxExecutionTime`: Maximum time allowed for command execution (in seconds).
+  - `Enabled`: A flag to enable or disable the command service.
+- **Behavior**: Subscribes to a specified topic for commands, executes them on the device, and publishes the output to the MQTT broker. The command execution respects the output size limit and execution time constraints.
 
 ## Rules
 

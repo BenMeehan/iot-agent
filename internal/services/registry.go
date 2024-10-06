@@ -98,6 +98,17 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				Logger:            sr.Logger,
 			}
 		},
+		"command": func() Service {
+			return &CommandService{
+				SubTopic:         config.Services.Command.Topic,
+				DeviceInfo:       deviceInfo,
+				QOS:              config.Services.Command.QOS,
+				MqttClient:       sr.mqttClient,
+				Logger:           sr.Logger,
+				OutputSizeLimit:  config.Services.Command.OutputSizeLimit,
+				MaxExecutionTime: config.Services.Command.MaxExecutionTime,
+			}
+		},
 	}
 
 	for name, createService := range serviceConfigs {
@@ -114,6 +125,11 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			}
 		case "metrics":
 			if config.Services.Metrics.Enabled {
+				sr.RegisterService(name, createService())
+				sr.Logger.Infof("%s service registered", name)
+			}
+		case "command":
+			if config.Services.Command.Enabled {
 				sr.RegisterService(name, createService())
 				sr.Logger.Infof("%s service registered", name)
 			}
