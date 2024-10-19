@@ -71,6 +71,23 @@ TODO:
   - `Enabled`: A flag to enable or disable the command service.
 - **Behavior**: Subscribes to a specified topic for commands, executes them on the device, and publishes the output to the MQTT broker. The command execution respects the output size limit and execution time constraints.
 
+### Geolocation Service
+
+- **Purpose**: Retrieves and publishes the geographical location of the IoT device using either GPS or network-based geolocation methods (e.g., Google Maps API).
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish location messages.
+  - `Interval`: The interval in seconds for retrieving and publishing the location.
+  - `DeviceID`: The unique identifier for the device.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `UseGoogleGeolocation`: A boolean flag indicating whether to use Google Geolocation API or local GPS.
+  - `APIKey`: The API key for accessing Google Geolocation services (required if `UseGoogleGeolocation` is true).
+  - `GPSDevicePath`: The path to the GPS device (if using local GPS).
+  - `GPSBaudRate`: The baud rate for the GPS device communication (if applicable).
+- **Behavior**: 
+  - Periodically retrieves the device's location and publishes it to the configured MQTT topic.
+  - If `UseGoogleGeolocation` is true, it gathers WiFi access points and cell tower information to determine the location using the Google Maps API. 
+  - If using local GPS, it reads location data from the specified GPS device.
+
 ## Rules
 
 1. **Naming Conventions**:
