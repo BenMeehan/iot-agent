@@ -7,6 +7,7 @@ import (
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/location"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/elliotchance/orderedmap/v2"
 	"github.com/sirupsen/logrus"
@@ -109,6 +110,29 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				MaxExecutionTime: config.Services.Command.MaxExecutionTime,
 			}
 		},
+		"location": func() Service {
+			var provider location.Provider
+			var err error
+
+			if config.Services.Location.SensorBased {
+				provider, err = location.NewGoogleGeolocationProvider(config.Services.Location.MapsAPIKey)
+				if err != nil {
+					sr.Logger.WithError(err).Error("failed to create Google Geolocation provider")
+				}
+			} else {
+				provider = location.NewDeviceSensorProvider(config.Services.Location.GPSDevicePort, config.Services.Location.GPSDeviceBaudRate)
+			}
+
+			return &LocationService{
+				Interval:         time.Duration(config.Services.Location.Interval),
+				QOS:              config.Services.Location.Interval,
+				PubTopic:         config.Services.Location.Topic,
+				MqttClient:       sr.mqttClient,
+				Logger:           sr.Logger,
+				DeviceInfo:       deviceInfo,
+				LocationProvider: provider,
+			}
+		},
 	}
 
 	for name, createService := range serviceConfigs {
@@ -130,6 +154,11 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			}
 		case "command":
 			if config.Services.Command.Enabled {
+				sr.RegisterService(name, createService())
+				sr.Logger.Infof("%s service registered", name)
+			}
+		case "location":
+			if config.Services.Location.Enabled {
 				sr.RegisterService(name, createService())
 				sr.Logger.Infof("%s service registered", name)
 			}
