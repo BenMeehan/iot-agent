@@ -51,16 +51,15 @@ type Config struct {
 			QOS              int    `yaml:"qos"`                // MQTT QoS level for command service messages
 		} `yaml:"command_service"`
 
-		Location struct {
-			Topic             string `yaml:"topic"`           // MQTT topic for location service
-			Enabled           bool   `yaml:"enabled"`         // Enable/disable location service
-			Interval          int    `yaml:"interval"`        // Interval between geo-location messages (in seconds)
-			QOS               int    `yaml:"qos"`             // MQTT QoS level for location messages
-			SensorBased       bool   `yaml:"sensor_based"`    // Use sensor or geo-location api
-			MapsAPIKey        string `yaml:"maps_api_key"`    // Google maps API Key
-			GPSDeviceBaudRate int    `yaml:"gps_baud_rate"`   // The Baud rate for GPS sensor
-			GPSDevicePort     string `yaml:"gps_device_port"` // UNIX Port where the GPS sensor is mounted
-		} `yaml:"location_service"`
+		SSH struct {
+			Topic          string `yaml:"topic"`            // MQTT topic for SSH service
+			Enabled        bool   `yaml:"enabled"`          // Enable/disable SSH service
+			BackendHost    string `yaml:"backend_host"`     // Host address for the SSH backend service
+			BackendPort    int    `yaml:"backend_port"`     // Host port for the SSH backend service
+			SSHUser        string `yaml:"ssh_user"`         // SSH username for connecting to the backend
+			PrivateKeyPath string `yaml:"private_key_path"` // Path to the device's private key
+			QOS            int    `yaml:"qos"`              // MQTT QoS level for ssh service messages
+		} `yaml:"ssh"`
 	} `yaml:"services"`
 }
 
