@@ -25,15 +25,24 @@ services:
     qos: 1
   command_service:
     topic: "iot-commands"
-    qos: 1
+    qos: 2
     output_size_limit: 1024  
     max_execution_time: 10 
     enabled: false
   ssh:
     topic: "iot-ssh"
     qos: 2
-    enabled: true
+    enabled: false
     backend_host: "172.24.160.18"
     backend_port: 22
-    ssh_user: "ben"
+    ssh_user: "tim"
     private_key_path: "certs/id_rsa"
+  location_service:
+    topic: "iot-location"
+    qos: 1
+    enabled: true
+    interval: 10
+    sensor_based: true
+    maps_api_key: ""
+    gps_device_baud_rate: 9600
+    gps_device_port: "/dev/ttyACM0"
