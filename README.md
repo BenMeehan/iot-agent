@@ -1,6 +1,8 @@
 # IoT Agent
 
-A generalized IoT agent designed to be modular, configurable, supporting a variety of services and designed to run on any unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.  
+A generalized IoT agent designed to be modular, configurable, supporting a variety of services, and designed to run on any Unix-based system. You can use [IOT-Cloud](https://github.com/BenMeehan/iot-cloud) or build your own MQTT backend.
+
+Pre-Alpha Discussions: [Here](https://github.com/BenMeehan/iot-agent/discussions/6)
 
 ## Running the Project
 
@@ -11,7 +13,7 @@ go run cmd/agent/main.go
 TODO:
 1. SSH Service
 2. Update Service
-3. Metrics Service
+3. Auth Service
 4. Easier Cross-Compilation for different architectures
 
 ## Architecture
@@ -24,7 +26,7 @@ TODO:
 
 2. **Create Service Logic**:
    - Add a new file in `internal/services` (e.g., `new_service.go`).
-   - Implement the service logic similar to existing services (e.g., `heartbeatService.go`).
+   - Implement the service logic similar to existing services (e.g., `heartbeat_service.go`).
 
 ## Services Overview
 
@@ -36,7 +38,7 @@ TODO:
   - `DeviceSecretFile`: Path to the file containing device secrets.
   - `ClientID`: The unique client identifier used for MQTT communication.
   - `QOS`: Quality of Service level for MQTT messages.
-- **Behavior**: Publishes registration data to the MQTT broker to register the device. If the device.json file contains a deviceID then, the device is already registered and we use that. Else, we do a secure registration through a PSK hash for authentication.
+- **Behavior**: Publishes registration data to the MQTT broker to register the device. If the `device.json` file contains a `deviceID`, then the device is already registered, and we use that. Otherwise, we do a secure registration through a PSK hash for authentication.
 
 ### Heartbeat Service
 
@@ -47,6 +49,44 @@ TODO:
   - `DeviceID`: The unique identifier for the device.
   - `QOS`: Quality of Service level for MQTT messages.
 - **Behavior**: Sends heartbeat messages at regular intervals to the MQTT broker to indicate that the device is still operational.
+
+### Metrics Service
+
+- **Purpose**: Collects and sends system and process metrics from the IoT device to a backend for monitoring and analysis.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish metrics data.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `Interval`: The interval in seconds to collect metrics (if applicable).
+  - `DeviceID`: The unique identifier for the device.
+- **Behavior**: Collects metrics such as CPU usage, memory, disk space, and network usage, along with specific process metrics. The service publishes this data to the configured MQTT broker at regular intervals or upon changes. Metrics are configurable through a JSON file.
+
+### Command Service
+
+- **Purpose**: Executes commands on the IoT device and publishes the output to the MQTT broker.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish command execution results.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `OutputSizeLimit`: Maximum size of the output from the executed command in bytes.
+  - `MaxExecutionTime`: Maximum time allowed for command execution (in seconds).
+  - `Enabled`: A flag to enable or disable the command service.
+- **Behavior**: Subscribes to a specified topic for commands, executes them on the device, and publishes the output to the MQTT broker. The command execution respects the output size limit and execution time constraints.
+
+### Geolocation Service
+
+- **Purpose**: Retrieves and publishes the geographical location of the IoT device using either GPS or network-based geolocation methods (e.g., Google Maps API).
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish location messages.
+  - `Interval`: The interval in seconds for retrieving and publishing the location.
+  - `DeviceID`: The unique identifier for the device.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `UseGoogleGeolocation`: A boolean flag indicating whether to use Google Geolocation API or local GPS.
+  - `APIKey`: The API key for accessing Google Geolocation services (required if `UseGoogleGeolocation` is true).
+  - `GPSDevicePath`: The path to the GPS device (if using local GPS).
+  - `GPSBaudRate`: The baud rate for the GPS device communication (if applicable).
+- **Behavior**: 
+  - Periodically retrieves the device's location and publishes it to the configured MQTT topic.
+  - If `UseGoogleGeolocation` is true, it gathers WiFi access points and cell tower information to determine the location using the Google Maps API. 
+  - If using local GPS, it reads location data from the specified GPS device.
 
 ## Rules
 
@@ -65,3 +105,4 @@ TODO:
 ## URLs
 
 - [EMQX Public MQTT5 Broker](https://www.emqx.com/en/mqtt/public-mqtt5-broker)
+- [MQTT Test Client](https://testclient-cloud.mqtt.cool/)

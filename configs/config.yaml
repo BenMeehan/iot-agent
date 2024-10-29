@@ -9,11 +9,32 @@ identity:
 services:
   registration:
     topic: "iot-registration"
-    enabled: true
+    enabled: false
     device_secret_file: "secrets/.device.secret.PSK.txt"
     qos: 2
   heartbeat:
     topic: "iot-heartbeat"
-    enabled: true
+    enabled: false
     interval: 10
     qos: 1
+  metrics:
+    topic: "iot-metrics"
+    metrics_config_file: "configs/metrics.json"
+    enabled: false
+    interval: 10
+    qos: 1
+  command_service:
+    topic: "iot-commands"
+    qos: 2
+    output_size_limit: 1024  
+    max_execution_time: 10 
+    enabled: false
+  location_service:
+    topic: "iot-location"
+    qos: 1
+    enabled: true
+    interval: 10
+    sensor_based: true
+    maps_api_key: ""
+    gps_device_baud_rate: 9600
+    gps_device_port: "/dev/ttyACM0"
