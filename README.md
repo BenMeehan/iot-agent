@@ -11,10 +11,9 @@ To run the project, use:
 go run cmd/agent/main.go
 ```
 TODO:
-1. SSH Service
-2. Update Service
-3. Auth Service
-4. Easier Cross-Compilation for different architectures
+1. Update Service
+2. Auth Service
+3. Easier Cross-Compilation for different architectures
 
 ## Architecture
 ![arch.png](./.github/images/agent-arch.png)
@@ -87,6 +86,21 @@ TODO:
   - Periodically retrieves the device's location and publishes it to the configured MQTT topic.
   - If `UseGoogleGeolocation` is true, it gathers WiFi access points and cell tower information to determine the location using the Google Maps API. 
   - If using local GPS, it reads location data from the specified GPS device.
+
+### SSH Service
+
+- **Purpose**: Establishes a secure reverse SSH connection to the IoT device, allowing remote access and control.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish SSH connection requests and status updates.
+  - `BackendHost`: The hostname or IP address of the remote SSH server.
+  - `BackendPort`: The port number of the remote SSH server.
+  - `SSHUser`: The username used for SSH authentication.
+  - `PrivateKeyPath`: Path to the SSH private key file used for authentication.
+  - `QOS`: Quality of Service level for MQTT messages.
+- **Behavior**: 
+  - Listens for incoming SSH connection requests via MQTT.
+  - Establishes a reverse SSH tunnel, forwarding specified local ports to the remote server.
+  - Handles incoming connections on the specified ports and forwards traffic between local and remote services.
 
 ## Rules
 
