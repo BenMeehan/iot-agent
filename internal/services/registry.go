@@ -147,6 +147,17 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				LocationProvider: provider,
 			}
 		},
+		"update": func() Service {
+			return &UpdateService{
+				SubTopic:       config.Services.Update.Topic,
+				DeviceInfo:     deviceInfo,
+				QOS:            config.Services.Update.QOS,
+				MqttClient:     sr.mqttClient,
+				Logger:         sr.Logger,
+				StateFile:      config.Services.Update.StateFile,
+				UpdateFilePath: config.Services.Update.UpdateFilePath,
+			}
+		},
 	}
 
 	for name, createService := range serviceConfigs {
@@ -178,6 +189,11 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			}
 		case "location":
 			if config.Services.Location.Enabled {
+				sr.RegisterService(name, createService())
+				sr.Logger.Infof("%s service registered", name)
+			}
+		case "update":
+			if config.Services.Update.Enabled {
 				sr.RegisterService(name, createService())
 				sr.Logger.Infof("%s service registered", name)
 			}
