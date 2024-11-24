@@ -12,24 +12,26 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
+	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
 
 // SSHService defines the structure of the SSH service
 type SSHService struct {
-	SubTopic       string
-	DeviceInfo     identity.DeviceInfoInterface
-	MqttClient     mqtt.MQTTClient
-	Logger         *logrus.Logger
-	BackendHost    string
-	BackendPort    int
-	SSHUser        string
-	PrivateKeyPath string
-	FileClient     file.FileOperations
-	QOS            int
-	sshClient      *ssh.Client
-	listeners      map[int]net.Listener
+	SubTopic        string
+	DeviceInfo      identity.DeviceInfoInterface
+	MqttClient      mqtt.MQTTClient
+	Logger          *logrus.Logger
+	BackendHost     string
+	BackendPort     int
+	SSHUser         string
+	PrivateKeyPath  string
+	FileClient      file.FileOperations
+	QOS             int
+	listeners       map[int]net.Listener
+	clientPool      cmap.ConcurrentMap[string, *ssh.Client]
+	clientListeners cmap.ConcurrentMap[string, int]
 }
 
 // Start listens for incoming SSH port requests via MQTT and starts the reverse SSH process
@@ -41,11 +43,9 @@ func (s *SSHService) Start() error {
 		return err
 	}
 
-	if err := s.establishSSHConnection(); err != nil {
-		return err
-	}
-
 	s.listeners = make(map[int]net.Listener)
+	s.clientPool = cmap.New[*ssh.Client]()
+	s.clientListeners = cmap.New[int]()
 	return nil
 }
 
@@ -64,40 +64,6 @@ func (s *SSHService) subscribeToTopic(topic string) error {
 	return nil
 }
 
-// establishSSHConnection creates a single SSH connection for reuse
-func (s *SSHService) establishSSHConnection() error {
-	s.Logger.WithField("private_key_path", s.PrivateKeyPath).Info("Reading private SSH key")
-
-	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
-	if err != nil {
-		return s.logAndReturnError("Failed to read private SSH key", err)
-	}
-
-	privateKey, err := ssh.ParsePrivateKey([]byte(key))
-	if err != nil {
-		return s.logAndReturnError("Failed to parse private SSH key", err)
-	}
-
-	config := &ssh.ClientConfig{
-		User:            s.SSHUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(privateKey)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	}
-
-	connStr := fmt.Sprintf("%s:%d", s.BackendHost, s.BackendPort)
-	s.Logger.WithField("connection_string", connStr).Info("Establishing SSH connection")
-
-	client, err := ssh.Dial("tcp", connStr, config)
-	if err != nil {
-		return s.logAndReturnError("Failed to establish SSH connection", err)
-	}
-
-	s.sshClient = client
-	s.Logger.Info("SSH connection established successfully")
-	return nil
-}
-
 // logAndReturnError logs the error with a message and returns it
 func (s *SSHService) logAndReturnError(message string, err error) error {
 	s.Logger.WithError(err).Error(message)
@@ -113,46 +79,102 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 	}
 
 	s.Logger.WithFields(logrus.Fields{
-		"local_port":  request.LocalPort,
-		"remote_port": request.RemotePort,
+		"local_port":   request.LocalPort,
+		"remote_port":  request.RemotePort,
+		"backend_host": request.BackendHost,
 	}).Info("Received reverse SSH port request")
 
-	if err := s.startReverseSSH(request.LocalPort, request.RemotePort); err != nil {
+	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost); err != nil {
 		s.Logger.WithError(err).Error("Failed to start reverse SSH")
 	}
 }
 
 // startReverseSSH establishes the reverse SSH connection with port forwarding
-func (s *SSHService) startReverseSSH(localPort, remotePort int) error {
-	if s.sshClient == nil {
-		return fmt.Errorf("SSH connection is not established")
+func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost string) error {
+	// Read and parse the private SSH key
+	s.Logger.WithField("private_key_path", s.PrivateKeyPath).Info("Reading private SSH key")
+	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
+	if err != nil {
+		return s.logAndReturnError("Failed to read private SSH key", err)
 	}
 
-	if _, exists := s.listeners[remotePort]; exists {
-		s.Logger.WithField("remote_port", remotePort).Warn("Listener already exists for this remote port, ignoring request")
-		return nil
+	privateKey, err := ssh.ParsePrivateKey([]byte(key))
+	if err != nil {
+		return s.logAndReturnError("Failed to parse private SSH key", err)
 	}
 
-	listener, err := s.sshClient.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
+	// SSH client configuration
+	config := &ssh.ClientConfig{
+		User:            s.SSHUser,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(privateKey)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         5 * time.Second,
+	}
+
+	// Get or create an SSH client for the backend host
+	client, exists := s.clientPool.Get(backendHost)
+	if !exists {
+		connStr := fmt.Sprintf("%s:%d", backendHost, s.BackendPort)
+		s.Logger.WithField("connection_string", connStr).Info("Establishing SSH connection")
+
+		client, err = ssh.Dial("tcp", connStr, config)
+		if err != nil {
+			return s.logAndReturnError("Failed to establish SSH connection", err)
+		}
+
+		s.clientPool.Set(backendHost, client)
+		s.clientListeners.Set(backendHost, 0)
+	}
+
+	// Increment listener count for the backend host
+	s.clientListeners.Upsert(backendHost, 1, func(exists bool, value int, _ int) int {
+		return value + 1
+	})
+
+	// Set up port forwarding
+	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
 		return s.logAndReturnError("Failed to set up port forwarding", err)
 	}
 
+	// Store the listener and log the success
 	s.listeners[remotePort] = listener
 	s.Logger.WithFields(logrus.Fields{
 		"local_port":  localPort,
 		"remote_port": remotePort,
 	}).Info("Port forwarding established")
 
-	go s.acceptConnections(listener, localPort, remotePort)
+	// Handle incoming connections
+	go s.acceptConnections(listener, localPort, remotePort, backendHost)
 
 	return nil
 }
 
 // acceptConnections accepts incoming connections on the listener
-func (s *SSHService) acceptConnections(listener net.Listener, localPort, remotePort int) {
-	defer listener.Close()
-	defer delete(s.listeners, remotePort)
+func (s *SSHService) acceptConnections(listener net.Listener, localPort, remotePort int, backendHost string) {
+	defer func() {
+		listener.Close()
+		delete(s.listeners, remotePort)
+
+		v, _ := s.clientListeners.Get(backendHost)
+		s.clientListeners.Set(backendHost, v-1)
+
+		// Decrement the listener count for the backend host
+		if count, ok := s.clientListeners.Get(backendHost); ok {
+			newCount := count - 1
+			if newCount > 0 {
+				s.clientListeners.Set(backendHost, newCount)
+			} else {
+				// If no active listeners remain, close the SSH client
+				s.Logger.WithField("backend_host", backendHost).Info("No active listeners, closing SSH client")
+				if client, exists := s.clientPool.Get(backendHost); exists {
+					client.Close()
+					s.clientPool.Remove(backendHost)
+				}
+				s.clientListeners.Remove(backendHost)
+			}
+		}
+	}()
 
 	for {
 		conn, err := listener.Accept()
