@@ -84,13 +84,13 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 		"backend_host": request.BackendHost,
 	}).Info("Received reverse SSH port request")
 
-	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost); err != nil {
+	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost, request.ServerID); err != nil {
 		s.Logger.WithError(err).Error("Failed to start reverse SSH")
 	}
 }
 
 // startReverseSSH establishes the reverse SSH connection with port forwarding
-func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost string) error {
+func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, serverId string) error {
 	// Read and parse the private SSH key
 	s.Logger.WithField("private_key_path", s.PrivateKeyPath).Info("Reading private SSH key")
 	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
@@ -144,15 +144,20 @@ func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost stri
 		"remote_port": remotePort,
 	}).Info("Port forwarding established")
 
+	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
+
 	// Handle incoming connections
-	go s.acceptConnections(listener, localPort, remotePort, backendHost)
+	go s.acceptConnections(listener, remotePort, backendHost, serverId)
 
 	return nil
 }
 
-// acceptConnections accepts incoming connections on the listener
-func (s *SSHService) acceptConnections(listener net.Listener, localPort, remotePort int, backendHost string) {
+// acceptConnections accepts incoming connections on the listener and auto-disconnects after 30 seconds
+func (s *SSHService) acceptConnections(listener net.Listener, remotePort int, backendHost, serverId string) {
+	// Set a fixed auto-disconnect timer for 30 seconds
+	autoDisconnectTimer := time.NewTimer(30 * time.Second)
 	defer func() {
+		autoDisconnectTimer.Stop()
 		listener.Close()
 		delete(s.listeners, remotePort)
 
@@ -174,16 +179,40 @@ func (s *SSHService) acceptConnections(listener net.Listener, localPort, remoteP
 				s.clientListeners.Remove(backendHost)
 			}
 		}
+
+		s.publishDisconnectRequest(s.DeviceInfo.GetDeviceID(), serverId, listener.Addr().(*net.TCPAddr).Port, remotePort)
 	}()
 
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
+		connChan := make(chan net.Conn, 1)
+		errChan := make(chan error, 1)
+
+		go func() {
+			conn, err := listener.Accept()
+			if err != nil {
+				errChan <- err
+			} else {
+				connChan <- conn
+			}
+		}()
+
+		select {
+		case conn := <-connChan:
+			// Handle the connection in a separate goroutine
+			go s.forwardConnection(conn, remotePort)
+
+		case err := <-errChan:
 			s.Logger.WithError(err).Error("Error accepting connection")
 			return // Exit on accept error
-		}
 
-		go s.forwardConnection(conn, remotePort)
+		case <-autoDisconnectTimer.C:
+			// Auto-disconnect after 30 seconds, regardless of connections
+			s.Logger.WithFields(logrus.Fields{
+				"remote_port":  remotePort,
+				"backend_host": backendHost,
+			}).Info("Listener auto-disconnected after 30 seconds")
+			return
+		}
 	}
 }
 
@@ -212,4 +241,61 @@ func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
 		"local_port":  remotePort,
 		"remote_port": conn.RemoteAddr().(*net.TCPAddr).Port,
 	}).Info("Finished forwarding connection")
+}
+
+// publishDeviceReply sends a DeviceReply message over MQTT
+func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, remotePort int) {
+	reply := models.DeviceReply{
+		DeviceID: deviceID,
+		Lport:    localPort,
+		Rport:    remotePort,
+	}
+
+	payload, err := json.Marshal(reply)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to marshal DeviceReply message")
+		return
+	}
+
+	replyTopic := fmt.Sprintf("%s/%s", s.SubTopic, serverId)
+	token := s.MqttClient.Publish(replyTopic, byte(s.QOS), false, payload)
+	token.Wait()
+
+	if err := token.Error(); err != nil {
+		s.Logger.WithError(err).Error("Failed to publish DeviceReply message")
+	} else {
+		s.Logger.WithFields(logrus.Fields{
+			"deviceID": deviceID,
+			"lport":    localPort,
+			"rport":    remotePort,
+		}).Info("Published DeviceReply message")
+	}
+}
+
+func (s *SSHService) publishDisconnectRequest(deviceID, serverId string, localPort, remotePort int) {
+	request := models.DisconnectRequest{
+		DeviceID: deviceID,
+		Lport:    localPort,
+		Rport:    remotePort,
+	}
+
+	payload, err := json.Marshal(request)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to marshal DisconnectRequest message")
+		return
+	}
+
+	topic := fmt.Sprintf("%s/%s/disconnect", s.SubTopic, serverId)
+	token := s.MqttClient.Publish(topic, byte(s.QOS), false, payload)
+	token.Wait()
+
+	if err := token.Error(); err != nil {
+		s.Logger.WithError(err).Error("Failed to publish DisconnectRequest message")
+	} else {
+		s.Logger.WithFields(logrus.Fields{
+			"deviceID": deviceID,
+			"lport":    localPort,
+			"rport":    remotePort,
+		}).Info("Published DisconnectRequest message")
+	}
 }
