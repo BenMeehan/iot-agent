@@ -132,7 +132,7 @@ func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost stri
 	})
 
 	// Set up port forwarding
-	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
+	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
 	if err != nil {
 		return s.logAndReturnError("Failed to set up port forwarding", err)
 	}
@@ -183,15 +183,15 @@ func (s *SSHService) acceptConnections(listener net.Listener, localPort, remoteP
 			return // Exit on accept error
 		}
 
-		go s.forwardConnection(conn, localPort)
+		go s.forwardConnection(conn, remotePort)
 	}
 }
 
 // forwardConnection forwards traffic between local and remote ports
-func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
+func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
 	defer conn.Close()
 
-	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", localPort))
+	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to connect to local service")
 		return
@@ -209,7 +209,7 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 	}
 
 	s.Logger.WithFields(logrus.Fields{
-		"local_port":  localPort,
+		"local_port":  remotePort,
 		"remote_port": conn.RemoteAddr().(*net.TCPAddr).Port,
 	}).Info("Finished forwarding connection")
 }
