@@ -40,6 +40,16 @@ type UpdateService struct {
 func (u *UpdateService) Start() error {
 	u.InitializeStateMachine()
 
+	// Ensure the state file exists
+	if err := u.EnsureStateFileExists(); err != nil {
+		return err
+	}
+
+	// Ensure the version file exists
+	if err := u.EnsureVersionFileExists(); err != nil {
+		return err
+	}
+
 	// Resume from the current state if possible
 	if err := u.ResumeFromState(); err != nil {
 		u.Logger.WithError(err).Error("Failed to resume update process")
@@ -54,11 +64,18 @@ func (u *UpdateService) Start() error {
 // InitializeStateMachine initializes valid state transitions
 func (u *UpdateService) InitializeStateMachine() {
 	u.validTransitions = map[constants.UpdateState][]constants.UpdateState{
-		constants.StateDownloading: {constants.StateVerifying},
-		constants.StateVerifying:   {constants.StateInstalling},
-		constants.StateInstalling:  {constants.StateSuccess, constants.StateFailure},
-		constants.StateSuccess:     {}, // Terminal state
-		constants.StateFailure:     {}, // Terminal state
+		constants.StateEmpty: {constants.StateDownloading},
+
+		// Normal flow from downloading to verifying to installing
+		constants.StateDownloading: {constants.StateVerifying, constants.StateFailure},
+		constants.StateVerifying:   {constants.StateInstalling, constants.StateFailure},
+
+		// After installation, the update can either succeed or fail
+		constants.StateInstalling: {constants.StateSuccess, constants.StateFailure},
+
+		// Terminal states: cannot transition from success or failure
+		constants.StateSuccess: {constants.StateDownloading},
+		constants.StateFailure: {constants.StateDownloading},
 	}
 }
 
@@ -76,11 +93,36 @@ func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
 	return false
 }
 
+// EnsureStateFileExists ensures the state file exists and is initialized if missing
+func (u *UpdateService) EnsureStateFileExists() error {
+	// Check if the state file exists
+	if _, err := os.Stat(u.StateFile); os.IsNotExist(err) {
+		// Create the state file with an empty state
+		initialState := struct{ State constants.UpdateState }{}
+		stateData, err := json.Marshal(initialState)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to initialize state file")
+			return err
+		}
+
+		if err := os.WriteFile(u.StateFile, stateData, 0644); err != nil {
+			u.Logger.WithError(err).Error("Failed to create state file")
+			return err
+		}
+
+		u.Logger.Info("State file created and initialized as empty")
+	}
+	return nil
+}
+
 // setState sets the current update state and saves it to disk
 func (u *UpdateService) setState(newState constants.UpdateState) error {
 	if !u.isValidTransition(newState) {
 		err := errors.New("invalid state transition")
-		u.Logger.WithField("currentState", u.state).WithField("newState", newState).WithError(err).Error("State transition denied")
+		u.Logger.WithFields(logrus.Fields{
+			"currentState": u.state,
+			"newState":     newState,
+		}).WithError(err).Error("State transition denied")
 		return err
 	}
 
@@ -135,9 +177,9 @@ func (u *UpdateService) ResumeFromState() error {
 	}
 }
 
-// handleUpdateCommand updated to include version check
+// handleUpdateCommand updated to include version check with enhanced logging
 func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message) {
-	u.Logger.Info("Received update")
+	u.Logger.Info("Received update command")
 
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
@@ -161,7 +203,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	if !isNew {
-		u.Logger.Info("Received version is not newer. Update aborted.")
+		u.Logger.WithFields(logrus.Fields{
+			"receivedVersion": payload.Version,
+		}).Info("Received version is not newer or is equal to the current version. Update aborted.")
 		return
 	}
 
@@ -183,6 +227,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
 	extractedDir := u.UpdateFilePath
 
+	u.setState(constants.StateInstalling)
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
 		u.setState(constants.StateFailure)
 		u.Logger.WithError(err).Error("Failed to apply update, starting rollback")
@@ -198,24 +243,42 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 
 // downloadUpdateFile downloads the encrypted update file from the provided URL
 func (u *UpdateService) downloadUpdateFile(url string) error {
+	u.Logger.WithField("url", url).Info("Downloading update file...")
+
 	resp, err := http.Get(url)
 	if err != nil {
+		u.Logger.WithError(err).Error("Error initiating download")
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("error downloading update file")
+		err := errors.New("error downloading update file, received non-OK status")
+		u.Logger.WithField("statusCode", resp.StatusCode).WithError(err).Error("Download failed")
+		return err
+	}
+
+	// Ensure the update file path directory exists
+	if err := os.MkdirAll(u.UpdateFilePath, os.ModePerm); err != nil {
+		u.Logger.WithError(err).Error("Failed to create update file path directory")
+		return err
 	}
 
 	file, err := os.Create(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"))
 	if err != nil {
+		u.Logger.WithError(err).Error("Failed to create file for saving the update")
 		return err
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, resp.Body)
-	return err
+	if err != nil {
+		u.Logger.WithError(err).Error("Error writing the downloaded content to file")
+		return err
+	}
+
+	u.Logger.Info("Update file downloaded successfully")
+	return nil
 }
 
 // verifyAndDecryptUpdate decrypts, verifies, and extracts the update files
@@ -230,7 +293,7 @@ func (u *UpdateService) verifyAndDecryptUpdate(encryptedFilePath string) error {
 		return err
 	}
 
-	return u.unzipFile(decryptedFilePath, u.UpdateFilePath)
+	return u.unzipFile(encryptedFilePath, u.UpdateFilePath)
 }
 
 // decryptFile decrypts an AES-encrypted file and writes the result to outputPath
@@ -420,7 +483,13 @@ func (u *UpdateService) rollbackFiles(instructions []models.UpdateInstruction) {
 	for _, inst := range instructions {
 		if inst.NewFile != "-" && inst.TargetPath != "-" {
 			backupPath := filepath.Join(backupDir, filepath.Base(inst.TargetPath))
-			u.copyFile(backupPath, inst.TargetPath)
+			u.Logger.WithFields(logrus.Fields{
+				"backupPath": backupPath,
+				"targetPath": inst.TargetPath,
+			}).Info("Rolling back file")
+			if err := u.copyFile(backupPath, inst.TargetPath); err != nil {
+				u.Logger.WithError(err).Errorf("Failed to restore file from backup: %s", inst.TargetPath)
+			}
 		}
 	}
 	u.Logger.Warn("Update rollback completed")
@@ -474,4 +543,28 @@ func (u *UpdateService) isNewVersion(newVersion string) (bool, error) {
 
 	// Compare the versions
 	return newVersionParsed.GreaterThan(currentVersion), nil
+}
+
+// EnsureVersionFileExists ensures the version.txt file exists and is initialized if missing
+func (u *UpdateService) EnsureVersionFileExists() error {
+	// Define the default version to initialize if the file does not exist
+	defaultVersion := "0.0.1"
+
+	// Check if the version.txt file exists
+	versionFilePath := filepath.Join("configs", "version.txt")
+	if _, err := os.Stat(versionFilePath); os.IsNotExist(err) {
+		// Create the version.txt file with the default version
+		if err := os.MkdirAll(filepath.Dir(versionFilePath), os.ModePerm); err != nil {
+			u.Logger.WithError(err).Error("Failed to create directory for version file")
+			return err
+		}
+
+		if err := os.WriteFile(versionFilePath, []byte(defaultVersion), 0644); err != nil {
+			u.Logger.WithError(err).Error("Failed to create version.txt file")
+			return err
+		}
+
+		u.Logger.WithField("defaultVersion", defaultVersion).Info("version.txt file created and initialized")
+	}
+	return nil
 }
