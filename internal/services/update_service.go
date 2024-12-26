@@ -18,6 +18,7 @@ import (
 
 	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
+	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/sirupsen/logrus"
@@ -29,6 +30,7 @@ type UpdateService struct {
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
 	MqttClient       mqtt.MQTTClient
+	FileClient       file.FileOperations
 	Logger           *logrus.Logger
 	StateFile        string
 	UpdateFilePath   string
@@ -99,13 +101,8 @@ func (u *UpdateService) EnsureStateFileExists() error {
 	if _, err := os.Stat(u.StateFile); os.IsNotExist(err) {
 		// Create the state file with an empty state
 		initialState := struct{ State constants.UpdateState }{}
-		stateData, err := json.Marshal(initialState)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to initialize state file")
-			return err
-		}
 
-		if err := os.WriteFile(u.StateFile, stateData, 0644); err != nil {
+		if err := u.FileClient.WriteJsonFile(u.StateFile, initialState); err != nil {
 			u.Logger.WithError(err).Error("Failed to create state file")
 			return err
 		}
@@ -127,8 +124,8 @@ func (u *UpdateService) setState(newState constants.UpdateState) error {
 	}
 
 	u.state = newState
-	stateData, _ := json.Marshal(struct{ State constants.UpdateState }{newState})
-	if err := os.WriteFile(u.StateFile, stateData, 0644); err != nil {
+	stateData := struct{ State constants.UpdateState }{newState}
+	if err := u.FileClient.WriteJsonFile(u.StateFile, stateData); err != nil {
 		u.Logger.WithError(err).Error("Failed to persist state")
 		return err
 	}
@@ -140,7 +137,7 @@ func (u *UpdateService) setState(newState constants.UpdateState) error {
 // ResumeFromState resumes the update process from the current state
 func (u *UpdateService) ResumeFromState() error {
 	// Read the current state from the state file
-	stateData, err := os.ReadFile(u.StateFile)
+	stateData, err := u.FileClient.ReadFile(u.StateFile)
 	if err != nil {
 		u.Logger.WithError(err).Error("Failed to read state file, starting fresh")
 		u.state = constants.StateDownloading // Default initial state
@@ -148,7 +145,7 @@ func (u *UpdateService) ResumeFromState() error {
 	}
 
 	var stateStruct struct{ State constants.UpdateState }
-	if err := json.Unmarshal(stateData, &stateStruct); err != nil {
+	if err := json.Unmarshal([]byte(stateData), &stateStruct); err != nil {
 		u.Logger.WithError(err).Error("Failed to parse state file, starting fresh")
 		u.state = constants.StateDownloading
 		return nil
@@ -516,11 +513,11 @@ func (u *UpdateService) copyFile(src, dst string) error {
 // readCurrentVersion reads the current version from configs/version.txt
 func (u *UpdateService) readCurrentVersion() (string, error) {
 	versionFile := filepath.Join("configs", "version.txt")
-	data, err := os.ReadFile(versionFile)
+	data, err := u.FileClient.ReadFile(versionFile)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return data, nil
 }
 
 // isNewVersion checks if the new version is newer than the current version using semantic versioning
@@ -559,7 +556,7 @@ func (u *UpdateService) EnsureVersionFileExists() error {
 			return err
 		}
 
-		if err := os.WriteFile(versionFilePath, []byte(defaultVersion), 0644); err != nil {
+		if err := u.FileClient.WriteFile(versionFilePath, defaultVersion); err != nil {
 			u.Logger.WithError(err).Error("Failed to create version.txt file")
 			return err
 		}
