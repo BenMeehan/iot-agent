@@ -13,76 +13,169 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Masterminds/semver/v3"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 
+	"github.com/benmeehan/iot-agent/internal/constants"
+	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/sirupsen/logrus"
 )
 
-type UpdateState string
-
-const (
-	StateDownloading UpdateState = "downloading"
-	StateVerifying   UpdateState = "verifying"
-	StateInstalling  UpdateState = "installing"
-	StateSuccess     UpdateState = "success"
-	StateFailure     UpdateState = "failure"
-)
-
-type UpdateCommandPayload struct {
-	UpdateURL string `json:"update_url"`
-}
-
-// UpdateInstruction defines the structure for file operations in the update
-type UpdateInstruction struct {
-	TargetPath string `json:"target_path"`
-	NewFile    string `json:"new_file"` // "-" for delete operations
-}
-
-// UpdateService struct with state and MQTT client
+// UpdateService struct with FSM
 type UpdateService struct {
-	SubTopic       string
-	DeviceInfo     identity.DeviceInfoInterface
-	QOS            int
-	MqttClient     mqtt.MQTTClient
-	Logger         *logrus.Logger
-	StateFile      string
-	UpdateFilePath string
-	state          UpdateState
+	SubTopic         string
+	DeviceInfo       identity.DeviceInfoInterface
+	QOS              int
+	MqttClient       mqtt.MQTTClient
+	Logger           *logrus.Logger
+	StateFile        string
+	UpdateFilePath   string
+	state            constants.UpdateState
+	validTransitions map[constants.UpdateState][]constants.UpdateState
 }
 
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
+	u.InitializeStateMachine()
+
+	// Resume from the current state if possible
+	if err := u.ResumeFromState(); err != nil {
+		u.Logger.WithError(err).Error("Failed to resume update process")
+	}
+
+	// Subscribe to MQTT update commands
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
 	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
 	return nil
 }
 
-// handleUpdateCommand is triggered by MQTT to start the update process
+// InitializeStateMachine initializes valid state transitions
+func (u *UpdateService) InitializeStateMachine() {
+	u.validTransitions = map[constants.UpdateState][]constants.UpdateState{
+		constants.StateDownloading: {constants.StateVerifying},
+		constants.StateVerifying:   {constants.StateInstalling},
+		constants.StateInstalling:  {constants.StateSuccess, constants.StateFailure},
+		constants.StateSuccess:     {}, // Terminal state
+		constants.StateFailure:     {}, // Terminal state
+	}
+}
+
+// isValidTransition checks if the transition between states is valid
+func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
+	validStates, exists := u.validTransitions[u.state]
+	if !exists {
+		return false
+	}
+	for _, validState := range validStates {
+		if newState == validState {
+			return true
+		}
+	}
+	return false
+}
+
+// setState sets the current update state and saves it to disk
+func (u *UpdateService) setState(newState constants.UpdateState) error {
+	if !u.isValidTransition(newState) {
+		err := errors.New("invalid state transition")
+		u.Logger.WithField("currentState", u.state).WithField("newState", newState).WithError(err).Error("State transition denied")
+		return err
+	}
+
+	u.state = newState
+	stateData, _ := json.Marshal(struct{ State constants.UpdateState }{newState})
+	if err := os.WriteFile(u.StateFile, stateData, 0644); err != nil {
+		u.Logger.WithError(err).Error("Failed to persist state")
+		return err
+	}
+
+	u.Logger.WithField("state", newState).Info("Update state updated")
+	return nil
+}
+
+// ResumeFromState resumes the update process from the current state
+func (u *UpdateService) ResumeFromState() error {
+	// Read the current state from the state file
+	stateData, err := os.ReadFile(u.StateFile)
+	if err != nil {
+		u.Logger.WithError(err).Error("Failed to read state file, starting fresh")
+		u.state = constants.StateDownloading // Default initial state
+		return nil
+	}
+
+	var stateStruct struct{ State constants.UpdateState }
+	if err := json.Unmarshal(stateData, &stateStruct); err != nil {
+		u.Logger.WithError(err).Error("Failed to parse state file, starting fresh")
+		u.state = constants.StateDownloading
+		return nil
+	}
+
+	u.state = stateStruct.State
+	u.Logger.WithField("state", u.state).Info("Resuming update process from state")
+
+	// Continue the process based on the current state
+	switch u.state {
+	case constants.StateDownloading:
+		// Re-download the update
+		u.handleUpdateCommand(nil, nil)
+		return nil
+	case constants.StateVerifying:
+		// Re-verify and decrypt the update
+		return u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"))
+	case constants.StateInstalling:
+		// Re-apply the update
+		instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
+		extractedDir := u.UpdateFilePath
+		return u.applyUpdate(instructionFile, extractedDir)
+	default:
+		u.Logger.Info("No action required for terminal state")
+		return nil
+	}
+}
+
+// handleUpdateCommand updated to include version check
 func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message) {
 	u.Logger.Info("Received update")
 
-	// Parse UpdateURL from MQTT message payload
-	var payload UpdateCommandPayload
+	// Parse UpdateCommandPayload
+	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		u.setState(StateFailure)
+		u.setState(constants.StateFailure)
 		u.Logger.WithError(err).Error("Failed to parse update command payload")
 		return
 	}
-	u.Logger.WithField("UpdateURL", payload.UpdateURL).Info("Parsed Update URL from command")
 
-	// Start download, verification, and installation process
-	u.setState(StateDownloading)
+	u.Logger.WithFields(logrus.Fields{
+		"UpdateURL": payload.UpdateURL,
+		"Version":   payload.Version,
+	}).Info("Parsed update command payload")
+
+	// Check if the version is newer
+	isNew, err := u.isNewVersion(payload.Version)
+	if err != nil {
+		u.setState(constants.StateFailure)
+		u.Logger.WithError(err).Error("Failed to check version")
+		return
+	}
+
+	if !isNew {
+		u.Logger.Info("Received version is not newer. Update aborted.")
+		return
+	}
+
+	// Proceed with the update process
+	u.setState(constants.StateDownloading)
 	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
-		u.setState(StateFailure)
+		u.setState(constants.StateFailure)
 		u.Logger.WithError(err).Error("Failed to download update file")
 		return
 	}
 
-	u.setState(StateVerifying)
+	u.setState(constants.StateVerifying)
 	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
-		u.setState(StateFailure)
+		u.setState(constants.StateFailure)
 		u.Logger.WithError(err).Error("Failed to verify update")
 		return
 	}
@@ -91,16 +184,15 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	extractedDir := u.UpdateFilePath
 
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
-		u.setState(StateFailure)
+		u.setState(constants.StateFailure)
 		u.Logger.WithError(err).Error("Failed to apply update, starting rollback")
 
 		// Rollback on failure
-		u.setState("rollback")
-		u.rollbackFiles([]UpdateInstruction{})
-		u.Logger.Warn("Rollback completed")
+		u.rollbackFiles([]models.UpdateInstruction{})
 		return
 	}
-	u.setState(StateSuccess)
+
+	u.setState(constants.StateSuccess)
 	u.Logger.Info("Update installed successfully")
 }
 
@@ -289,14 +381,14 @@ func (u *UpdateService) applyUpdate(instructionFile string, extractedDir string)
 }
 
 // parseInstructions reads and parses the JSON instruction file
-func (u *UpdateService) parseInstructions(instructionFile string) ([]UpdateInstruction, error) {
+func (u *UpdateService) parseInstructions(instructionFile string) ([]models.UpdateInstruction, error) {
 	file, err := os.Open(instructionFile)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	var instructions []UpdateInstruction
+	var instructions []models.UpdateInstruction
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&instructions); err != nil {
 		return nil, err
@@ -305,7 +397,7 @@ func (u *UpdateService) parseInstructions(instructionFile string) ([]UpdateInstr
 }
 
 // backupFiles creates backups of existing files that may be affected by the update
-func (u *UpdateService) backupFiles(instructions []UpdateInstruction) error {
+func (u *UpdateService) backupFiles(instructions []models.UpdateInstruction) error {
 	backupDir := filepath.Join(u.UpdateFilePath, "backup")
 	if err := os.MkdirAll(backupDir, os.ModePerm); err != nil {
 		return err
@@ -323,7 +415,7 @@ func (u *UpdateService) backupFiles(instructions []UpdateInstruction) error {
 }
 
 // rollbackFiles restores files from the backup in case of a failed update
-func (u *UpdateService) rollbackFiles(instructions []UpdateInstruction) {
+func (u *UpdateService) rollbackFiles(instructions []models.UpdateInstruction) {
 	backupDir := filepath.Join(u.UpdateFilePath, "backup")
 	for _, inst := range instructions {
 		if inst.NewFile != "-" && inst.TargetPath != "-" {
@@ -352,10 +444,34 @@ func (u *UpdateService) copyFile(src, dst string) error {
 	return err
 }
 
-// setState sets the current update state and saves it to disk
-func (u *UpdateService) setState(state UpdateState) {
-	u.state = state
-	stateData, _ := json.Marshal(struct{ State UpdateState }{state})
-	_ = os.WriteFile(u.StateFile, stateData, 0644)
-	u.Logger.WithField("state", state).Info("Update state updated")
+// readCurrentVersion reads the current version from configs/version.txt
+func (u *UpdateService) readCurrentVersion() (string, error) {
+	versionFile := filepath.Join("configs", "version.txt")
+	data, err := os.ReadFile(versionFile)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// isNewVersion checks if the new version is newer than the current version using semantic versioning
+func (u *UpdateService) isNewVersion(newVersion string) (bool, error) {
+	currentVersionStr, err := u.readCurrentVersion()
+	if err != nil {
+		return false, err
+	}
+
+	// Parse the current and new version strings into semver.Version
+	currentVersion, err := semver.NewVersion(currentVersionStr)
+	if err != nil {
+		return false, errors.New("invalid current version format")
+	}
+
+	newVersionParsed, err := semver.NewVersion(newVersion)
+	if err != nil {
+		return false, errors.New("invalid new version format")
+	}
+
+	// Compare the versions
+	return newVersionParsed.GreaterThan(currentVersion), nil
 }
