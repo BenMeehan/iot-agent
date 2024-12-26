@@ -1,6 +1,7 @@
 package file
 
 import (
+	"encoding/json"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -10,10 +11,11 @@ import (
 type FileOperations interface {
 	ReadFile(filePath string) (string, error)
 	WriteFile(filePath string, data string) error
+	WriteJsonFile(filePath string, data any) error
 }
 
 // FileService implements the FileOperations interface using standard file operations.
-type FileService struct{
+type FileService struct {
 	Logger *logrus.Logger
 }
 
@@ -36,4 +38,13 @@ func (fs *FileService) ReadFile(filePath string) (string, error) {
 // WriteFile writes the data string to the file at filePath.
 func (fs *FileService) WriteFile(filePath string, data string) error {
 	return os.WriteFile(filePath, []byte(data), 0644)
+}
+
+// WriteJsonFile writes the json data string to the json file at filePath.
+func (fs *FileService) WriteJsonFile(filePath string, data any) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, jsonData, 0644)
 }

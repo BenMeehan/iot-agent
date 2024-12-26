@@ -71,6 +71,14 @@ type Config struct {
 			GPSDeviceBaudRate int    `yaml:"gps_baud_rate"`   // The Baud rate for GPS sensor
 			GPSDevicePort     string `yaml:"gps_device_port"` // UNIX Port where the GPS sensor is mounted
 		} `yaml:"location_service"`
+
+		Update struct {
+			Topic          string `yaml:"topic"`            // MQTT topic for update service
+			QOS            int    `yaml:"qos"`              // MQTT QoS level for update messages
+			UpdateFilePath string `yaml:"update_file_path"` // Path to save downloaded update files
+			StateFile      string `yaml:"state_file"`       // Path to store the update state
+			Enabled        bool   `yaml:"enabled"`          // Enable/disable update service
+		} `yaml:"update_service"`
 	} `yaml:"services"`
 }
 
