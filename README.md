@@ -10,10 +10,9 @@ To run the project, use:
 ```sh
 go run cmd/agent/main.go
 ```
-TODO:
-1. Update Service
-2. Auth Service
-3. Easier Cross-Compilation for different architectures
+## TODO:
+1. Auth Service
+2. Easier Cross-Compilation for different architectures
 
 ## Architecture
 ![arch.png](./.github/images/agent-arch.png)
@@ -101,6 +100,23 @@ TODO:
   - Listens for incoming SSH connection requests via MQTT.
   - Establishes a reverse SSH tunnel, forwarding specified local ports to the remote server.
   - Handles incoming connections on the specified ports and forwards traffic between local and remote services.
+
+### Update Service
+
+- **Purpose**: Handles the update of IoT device software or firmware by downloading and applying new versions from the backend.
+- **Configuration Parameters**:
+  - `PubTopic`: The MQTT topic to publish update notifications and status messages.
+  - `DeviceID`: The unique identifier for the device.
+  - `UpdateURL`: The URL to fetch the update package.
+  - `UpdateInterval`: Interval in seconds between checking for updates.
+  - `QOS`: Quality of Service level for MQTT messages.
+  - `MaxRetryAttempts`: Maximum number of retry attempts if an update fails.
+  - `UpdateCommand`: The command to execute after the update is downloaded (e.g., rebooting the device).
+- **Behavior**:
+  - Receives updates through MQTT in `UpdateURL`.
+  - Downloads the update package and verifies its integrity.
+  - Applies the update using the configured `UpdateCommand` and publishes the status to the MQTT broker.
+  - Retries the update process a configurable number of times if it fails.
 
 ## Rules
 
