@@ -14,6 +14,7 @@ services:
   registration:
     topic: "iot-registration"
     qos: 2
+    max_backoff_seconds: 60
     enabled: true
   heartbeat:
     topic: "iot-heartbeat"

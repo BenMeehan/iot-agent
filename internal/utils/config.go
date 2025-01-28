@@ -21,10 +21,10 @@ type Config struct {
 
 	Services struct {
 		Registration struct {
-			Topic        string `yaml:"topic"`         // MQTT topic for registration service
-			Enabled      bool   `yaml:"enabled"`       // Enable/disable registration service
-			QOS          int    `yaml:"qos"`           // MQTT QoS level for registration messages
-			DeviceIDFile string `yaml:"deviceid_file"` // Path to the device ID file (if any)
+			Topic             string `yaml:"topic"`               // MQTT topic for registration service
+			MaxBackoffSeconds int    `yaml:"max_backoff_seconds"` // Maximum backoff time for registration retries
+			Enabled           bool   `yaml:"enabled"`             // Enable/disable registration service
+			QOS               int    `yaml:"qos"`                 // MQTT QoS level for registration messages
 		} `yaml:"registration"`
 
 		Heartbeat struct {

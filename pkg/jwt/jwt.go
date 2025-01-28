@@ -14,10 +14,10 @@ import (
 
 // JWTManagerInterface defines the methods to manage JWT tokens.
 type JWTManagerInterface interface {
-	LoadJWT() error              // Loads the JWT token from the file.
-	SaveJWT(token string) error  // Saves the JWT token to the file.
-	GetJWT() string              // Retrieves the current JWT token.
-	IsJWTExpired() (bool, error) // Checks if the current JWT token is expired.
+	LoadJWT() error             // Loads the JWT token from the file.
+	SaveJWT(token string) error // Saves the JWT token to the file.
+	GetJWT() string             // Retrieves the current JWT token.
+	IsJWTValid() (bool, error)  // Checks if the current JWT token is valid.
 }
 
 // JWTManager manages the JWT token and its file operations.
@@ -83,36 +83,6 @@ func (jm *JWTManager) GetJWT() string {
 	return jm.Token
 }
 
-// IsJWTExpired checks if the current JWT token is expired.
-func (jm *JWTManager) IsJWTExpired() (bool, error) {
-	if jm.Token == "" {
-		return true, errors.New("JWT token is empty")
-	}
-
-	parts := strings.Split(jm.Token, ".")
-	if len(parts) != 3 {
-		return true, errors.New("invalid JWT token format")
-	}
-
-	payload, err := jwtDecodeBase64(parts[1])
-	if err != nil {
-		return true, errors.New("failed to decode JWT payload: " + err.Error())
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal([]byte(payload), &claims); err != nil {
-		return true, errors.New("failed to parse JWT claims: " + err.Error())
-	}
-
-	exp, ok := claims["exp"].(float64)
-	if !ok {
-		return true, errors.New("JWT expiration (exp) claim missing or invalid")
-	}
-
-	expiryTime := time.Unix(int64(exp), 0)
-	return time.Now().After(expiryTime), nil
-}
-
 // jwtDecodeBase64 decodes a base64 JWT part.
 func jwtDecodeBase64(input string) (string, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(input)
@@ -120,4 +90,51 @@ func jwtDecodeBase64(input string) (string, error) {
 		return "", err
 	}
 	return string(decoded), nil
+}
+
+// IsJWTValid checks if the current JWT token is valid.
+// It verifies the token structure, required claims, and expiration.
+func (jm *JWTManager) IsJWTValid() (bool, error) {
+	if jm.Token == "" {
+		return false, errors.New("JWT token is empty")
+	}
+
+	// Split the token into its three parts: header, payload, and signature.
+	parts := strings.Split(jm.Token, ".")
+	if len(parts) != 3 {
+		return false, errors.New("invalid JWT token format")
+	}
+
+	// Decode and parse the payload (claims).
+	payload, err := jwtDecodeBase64(parts[1])
+	if err != nil {
+		return false, errors.New("failed to decode JWT payload: " + err.Error())
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal([]byte(payload), &claims); err != nil {
+		return false, errors.New("failed to parse JWT claims: " + err.Error())
+	}
+
+	// Check for required claims (e.g., "exp" for expiration).
+	exp, ok := claims["exp"].(float64)
+	if !ok {
+		return false, errors.New("JWT expiration (exp) claim missing or invalid")
+	}
+
+	// Check for other custom claims if required (e.g., "iss", "aud").
+	if iss, ok := claims["iss"].(string); !ok || iss == "" {
+		return false, errors.New("JWT issuer (iss) claim missing or invalid")
+	}
+	if aud, ok := claims["aud"].(string); !ok || aud == "" {
+		return false, errors.New("JWT audience (aud) claim missing or invalid")
+	}
+
+	// Check expiration time.
+	expiryTime := time.Unix(int64(exp), 0)
+	if time.Now().After(expiryTime) {
+		return false, errors.New("JWT token is expired")
+	}
+
+	return true, nil
 }

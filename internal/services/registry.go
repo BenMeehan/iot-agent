@@ -83,6 +83,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				FileClient:        sr.fileClient,
 				EncryptionManager: sr.encryptionManager,
 				JWTManager:        sr.jwtManager,
+				MaxBackoffSeconds: config.Services.Registration.MaxBackoffSeconds,
 				Logger:            sr.Logger,
 			}
 		},
