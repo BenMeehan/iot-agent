@@ -6,10 +6,13 @@ mqtt:
 identity:
   device_file: "configs/device.json"
 
+security:
+  jwt_file: "secrets/jwt.bin"
+  aes_key_file: "secrets/aes.key"
+
 services:
   registration:
     topic: "iot-registration"
-    device_secret_file: "secrets/.device.secret.PSK.txt"
     qos: 2
     enabled: true
   heartbeat:

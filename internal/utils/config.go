@@ -21,11 +21,10 @@ type Config struct {
 
 	Services struct {
 		Registration struct {
-			Topic            string `yaml:"topic"`              // MQTT topic for registration service
-			Enabled          bool   `yaml:"enabled"`            // Enable/disable registration service
-			DeviceSecretFile string `yaml:"device_secret_file"` // Path to the device secret file
-			QOS              int    `yaml:"qos"`                // MQTT QoS level for registration messages
-			DeviceIDFile     string `yaml:"deviceid_file"`      // Path to the device ID file (if any)
+			Topic        string `yaml:"topic"`         // MQTT topic for registration service
+			Enabled      bool   `yaml:"enabled"`       // Enable/disable registration service
+			QOS          int    `yaml:"qos"`           // MQTT QoS level for registration messages
+			DeviceIDFile string `yaml:"deviceid_file"` // Path to the device ID file (if any)
 		} `yaml:"registration"`
 
 		Heartbeat struct {
@@ -80,6 +79,11 @@ type Config struct {
 			Enabled        bool   `yaml:"enabled"`          // Enable/disable update service
 		} `yaml:"update_service"`
 	} `yaml:"services"`
+
+	Security struct {
+		JWTFile    string `yaml:"jwt_file"`     // Path to the JWT token file
+		AESKeyFile string `yaml:"aes_key_file"` // Path to the AES key file
+	}
 }
 
 // LoadConfig loads the YAML configuration from the specified file.

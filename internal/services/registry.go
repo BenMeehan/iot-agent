@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/utils"
+	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/location"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/elliotchance/orderedmap/v2"
@@ -22,19 +24,25 @@ type ServiceRegistryInterface interface {
 
 // ServiceRegistry manages a collection of services and their startup order
 type ServiceRegistry struct {
-	services   *orderedmap.OrderedMap[string, Service]
-	mqttClient mqtt.MQTTClient
-	fileClient file.FileOperations
-	Logger     *logrus.Logger
+	services          *orderedmap.OrderedMap[string, Service]
+	mqttClient        mqtt.MQTTClient
+	fileClient        file.FileOperations
+	encryptionManager encryption.EncryptionManagerInterface
+	jwtManager        jwt.JWTManagerInterface
+	Logger            *logrus.Logger
 }
 
 // NewServiceRegistry initializes and returns a new ServiceRegistry instance
-func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger *logrus.Logger) *ServiceRegistry {
+func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
+	jwtManager jwt.JWTManagerInterface, logger *logrus.Logger) *ServiceRegistry {
+
 	return &ServiceRegistry{
-		services:   orderedmap.NewOrderedMap[string, Service](),
-		mqttClient: mqttClient,
-		fileClient: fileClient,
-		Logger:     logger,
+		services:          orderedmap.NewOrderedMap[string, Service](),
+		mqttClient:        mqttClient,
+		fileClient:        fileClient,
+		encryptionManager: encryptionManager,
+		jwtManager:        jwtManager,
+		Logger:            logger,
 	}
 }
 
@@ -67,14 +75,15 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 	serviceConfigs := map[string]func() Service{
 		"registration": func() Service {
 			return &RegistrationService{
-				PubTopic:         config.Services.Registration.Topic,
-				DeviceSecretFile: config.Services.Registration.DeviceSecretFile,
-				ClientID:         config.MQTT.ClientID,
-				QOS:              config.Services.Registration.QOS,
-				DeviceInfo:       deviceInfo,
-				MqttClient:       sr.mqttClient,
-				FileClient:       sr.fileClient,
-				Logger:           sr.Logger,
+				PubTopic:          config.Services.Registration.Topic,
+				ClientID:          config.MQTT.ClientID,
+				QOS:               config.Services.Registration.QOS,
+				DeviceInfo:        deviceInfo,
+				MqttClient:        sr.mqttClient,
+				FileClient:        sr.fileClient,
+				EncryptionManager: sr.encryptionManager,
+				JWTManager:        sr.jwtManager,
+				Logger:            sr.Logger,
 			}
 		},
 		"heartbeat": func() Service {

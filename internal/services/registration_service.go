@@ -4,26 +4,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 
+	"github.com/benmeehan/iot-agent/internal/models"
+	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/sirupsen/logrus"
 )
 
 // RegistrationService manages the device registration process
 type RegistrationService struct {
-	PubTopic         string
-	DeviceSecretFile string
-	ClientID         string
-	QOS              int
-	DeviceInfo       identity.DeviceInfoInterface
-	MqttClient       mqtt.MQTTClient
-	FileClient       file.FileOperations
+	PubTopic          string
+	ClientID          string
+	QOS               int
+	DeviceInfo        identity.DeviceInfoInterface
+	MqttClient        mqtt.MQTTClient
+	FileClient        file.FileOperations
+	JWTManager        jwt.JWTManagerInterface
+	EncryptionManager encryption.EncryptionManagerInterface
 	Logger            *logrus.Logger
 }
 
@@ -32,28 +35,58 @@ func (rs *RegistrationService) Start() error {
 	// Check if device ID is already present
 	existingDeviceID := rs.DeviceInfo.GetDeviceID()
 	if existingDeviceID != "" {
-		rs.Logger.Infof("Device %s already registered with ID: %s", rs.ClientID, existingDeviceID)
-		return nil
+		expired, err := rs.JWTManager.IsJWTExpired()
+		if err != nil {
+			rs.Logger.WithError(err).Error("Failed to check JWT token expiry")
+		}
+
+		if expired {
+			payload := models.RegistrationPayload{
+				DeviceID: existingDeviceID,
+			}
+
+			if err := rs.Register(payload); err != nil {
+				rs.Logger.WithError(err).Error("failed to refresh JWT token")
+				return err
+			}
+
+			rs.Logger.Warnf("JWT token expired for device: %s. Re-registering...", rs.ClientID)
+		} else {
+			rs.Logger.Infof("Device %s already registered with ID: %s", rs.ClientID, existingDeviceID)
+			return nil
+		}
 	}
 
-	// Read the device secret from the file
-	deviceSecret, err := rs.readDeviceSecret()
-	if err != nil {
+	payload := models.RegistrationPayload{
+		ClientID: rs.ClientID,
+		Name:     rs.DeviceInfo.GetDeviceIdentity().Name,
+		OrgID:    rs.DeviceInfo.GetDeviceIdentity().OrgID,
+		Metadata: rs.DeviceInfo.GetDeviceIdentity().Metadata,
+	}
+
+	if err := rs.Register(payload); err != nil {
+		rs.Logger.WithError(err).Error("Failed to register device")
 		return err
 	}
 
-	payload := map[string]string{
-		"client_id":     rs.ClientID,
-		"device_secret": deviceSecret,
-	}
+	return nil
+}
 
+func (rs *RegistrationService) Register(payload models.RegistrationPayload) error {
+	// Serialize the registration payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return errors.New("failed to serialize registration payload")
 	}
 
+	// Encrypt the registration payload
+	encryptedPayload, err := rs.EncryptionManager.Encrypt(payloadBytes)
+	if err != nil {
+		rs.Logger.WithError(err).Error("Failed to encrypt registration payload")
+	}
+
 	// Publish registration message to the broker
-	token := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, payloadBytes)
+	token := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, encryptedPayload)
 	token.Wait()
 	if err := token.Error(); err != nil {
 		rs.Logger.WithError(err).Error("failed to publish registration message")
@@ -86,16 +119,30 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 
 	// Subscribe to the unique response topic
 	token := rs.MqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
-		var response map[string]string
+		var response models.RegistrationResponse
 		err := json.Unmarshal(msg.Payload(), &response)
 		if err != nil {
 			rs.Logger.WithError(err).Error("Error parsing registration response")
 			return
 		}
 
-		deviceID, exists := response["device_id"]
-		if !exists {
+		// Extract device ID from the response
+		deviceID := response.DeviceID
+		if deviceID == "" {
 			rs.Logger.Error("Device ID not found in the registration response")
+			return
+		}
+
+		// Extract JWT token from the response
+		jwtToken := response.JWTToken
+		if jwtToken == "" {
+			rs.Logger.Error("JWT token not found in the registration response")
+			return
+		}
+
+		// Save the JWT token securely
+		if err := rs.JWTManager.SaveJWT(jwtToken); err != nil {
+			rs.Logger.WithError(err).Error("Failed to save JWT token")
 			return
 		}
 
@@ -108,16 +155,4 @@ func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<
 		rs.Logger.WithError(err).Error("Failed to subscribe to registration response topic")
 		return
 	}
-}
-
-// readDeviceSecret reads and returns the device secret from the DeviceSecretFile
-func (rs *RegistrationService) readDeviceSecret() (string, error) {
-	secret, err := rs.FileClient.ReadFile(rs.DeviceSecretFile)
-	if err != nil {
-		rs.Logger.WithError(err).Error("Failed to read device secret file")
-		return "", errors.New("failed to read device secret file")
-	}
-
-	// Trim any extraneous whitespace characters (like newlines)
-	return strings.TrimSpace(secret), nil
 }

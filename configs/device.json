@@ -1,1 +1,11 @@
-{"device_id":"019214a8-7a41-7d09-bf2e-a27b82161829"}
+{
+    "ID": "",
+    "Name": "Temperature Sensor 01",
+    "OrgID": "org-9876",
+    "Metadata": {
+      "network_ip": "192.168.1.100",
+      "owner_org_id": "org-9876",
+      "firmware_version": "1.2.3"
+    }
+  }
+  
