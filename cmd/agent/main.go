@@ -7,8 +7,10 @@ import (
 
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
+	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
@@ -17,10 +19,10 @@ import (
 func main() {
 	// Set up structured logging with JSON output
 	var log = &logrus.Logger{
-		Out: os.Stdout,
+		Out:       os.Stdout,
 		Formatter: new(logrus.JSONFormatter),
-		Hooks: make(logrus.LevelHooks),
-		Level: logrus.InfoLevel,
+		Hooks:     make(logrus.LevelHooks),
+		Level:     logrus.InfoLevel,
 	}
 
 	// Load configuration from file
@@ -50,8 +52,20 @@ func main() {
 		log.WithError(err).Fatal("Failed to load device information")
 	}
 
+	AESKey, err := fileClient.ReadFileRaw(config.Security.AESKeyFile)
+	if err != nil {
+		log.WithError(err).Fatal("failed to read AES key")
+	}
+
+	EncryptionManager, err := encryption.NewEncryptionManager(AESKey)
+	if err != nil {
+		log.WithError(err).Fatal("failed to create encryption manager")
+	}
+
+	JWTManager := jwt.NewJWTManager(config.Security.JWTFile, fileClient, EncryptionManager)
+
 	// Create a new service registry to manage services
-	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient, log)
+	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient, EncryptionManager, JWTManager, log)
 
 	// Register all services based on the configuration
 	serviceRegistry.RegisterServices(config, deviceInfo)
