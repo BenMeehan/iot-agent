@@ -28,15 +28,24 @@ go run cmd/agent/main.go
 
 ## Services Overview
 
+```
+Check the /docs directory for detailed documentation of the services
+```
+
 ### Registration Service
 
-- **Purpose**: Handles the registration of IoT devices with the server.
+- **Purpose**: Handles secure device registration via MQTT, supporting initial registration, re-registration, and JWT-based authentication.
 - **Configuration Parameters**:
-  - `PubTopic`: The MQTT topic to publish registration messages.
-  - `DeviceSecretFile`: Path to the file containing device secrets.
-  - `ClientID`: The unique client identifier used for MQTT communication.
+  - `PubTopic`: MQTT topic for registration requests.
+  - `ClientID`: Unique device identifier.
   - `QOS`: Quality of Service level for MQTT messages.
-- **Behavior**: Publishes registration data to the MQTT broker to register the device. If the `device.json` file contains a `deviceID`, then the device is already registered, and we use that. Otherwise, we do a secure registration through a PSK hash for authentication.
+  - `MaxBackoffSeconds`: Maximum retry interval for exponential backoff.
+- **Behavior**:
+  - If registered, validates the JWT token.
+  - If unregistered or JWT is invalid, sends a secure registration request.
+  - Encrypts payloads and subscribes to `PubTopic/response/{DeviceID}` for confirmation.
+  - Implements exponential backoff with jitter for retries.
+  - Saves the `DeviceID` and JWT token upon successful registration.
 
 ### Heartbeat Service
 
