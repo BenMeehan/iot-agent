@@ -10,10 +10,10 @@ import (
 
 // Identity holds the device's unique identifier and other metadata.
 type Identity struct {
-	ID       string          `json:"id,omitempty"`       // Unique identifier for the device
-	Name     string          `json:"name,omitempty"`     // Name of the device
-	OrgID    string          `json:"org_id,omitempty"`   // Organization ID associated with the device
-	Metadata json.RawMessage `json:"metadata,omitempty"` // Additional metadata for the device
+	ID       string          `json:"device_id,omitempty"`   // Unique identifier for the device
+	Name     string          `json:"device_name,omitempty"` // Name of the device
+	OrgID    string          `json:"org_id,omitempty"`      // Organization ID associated with the device
+	Metadata json.RawMessage `json:"metadata,omitempty"`    // Additional metadata for the device
 }
 
 // DeviceInfoInterface defines the methods that DeviceInfo implements.

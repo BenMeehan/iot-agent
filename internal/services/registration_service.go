@@ -119,17 +119,59 @@ func (rs *RegistrationService) Register(payload models.RegistrationPayload) erro
 		return err
 	}
 
-	// Publish the registration message to the MQTT broker
-	rs.Logger.Infof("Publishing registration request to topic: %s", rs.PubTopic)
-	token := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, encryptedPayload)
+	// Create a channel to receive the response
+	responseChannel := make(chan string, 1)
+
+	// Subscribe to the response topic before publishing the request
+	var respTopic string
+	if payload.DeviceID != "" {
+		respTopic = rs.PubTopic + "/response/" + payload.DeviceID
+	} else {
+		respTopic = rs.PubTopic + "/response/" + rs.ClientID
+	}
+	rs.Logger.Infof("Subscribing to response topic: %s", respTopic)
+
+	token := rs.MqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
+		var response models.RegistrationResponse
+		if err := json.Unmarshal(msg.Payload(), &response); err != nil {
+			rs.Logger.WithError(err).Error("Error parsing registration response")
+			return
+		}
+
+		// Validate the response and extract the device ID
+		if response.DeviceID == "" {
+			rs.Logger.Error("Device ID not found in the registration response")
+			return
+		}
+		if response.JWTToken == "" {
+			rs.Logger.Error("JWT token not found in the registration response")
+			return
+		}
+
+		// Save the JWT token securely
+		if err := rs.JWTManager.SaveJWT(response.JWTToken); err != nil {
+			rs.Logger.WithError(err).Error("Failed to save JWT token")
+			return
+		}
+
+		// Send the device ID to the response channel
+		responseChannel <- response.DeviceID
+	})
+
 	token.Wait()
 	if err := token.Error(); err != nil {
-		rs.Logger.WithError(err).Error("Failed to publish registration message")
+		rs.Logger.WithError(err).Error("Failed to subscribe to registration response topic")
 		return err
 	}
 
-	responseChannel := make(chan string, 1)
-	go rs.waitForRegistrationResponse(responseChannel)
+	// Publish the registration message to the MQTT broker
+	rs.Logger.Infof("Publishing registration request to topic: %s", rs.PubTopic)
+	publishToken := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, encryptedPayload)
+	publishToken.Wait()
+	if err := publishToken.Error(); err != nil {
+		rs.Logger.WithError(err).Error("Failed to publish registration message")
+		return err
+	}
 
 	// Wait for a response or timeout after 10 seconds
 	select {
@@ -145,45 +187,4 @@ func (rs *RegistrationService) Register(payload models.RegistrationPayload) erro
 	}
 
 	return nil
-}
-
-// waitForRegistrationResponse listens for the device registration response
-// on a unique topic specific to the client.
-func (rs *RegistrationService) waitForRegistrationResponse(responseChannel chan<- string) {
-	respTopic := rs.PubTopic + "/response/" + rs.ClientID
-	rs.Logger.Infof("subscribing to response topic: %s", respTopic)
-
-	// subscribe to the unique response topic
-	token := rs.MqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
-		var response models.RegistrationResponse
-		if err := json.Unmarshal(msg.Payload(), &response); err != nil {
-			rs.Logger.WithError(err).Error("error parsing registration response")
-			return
-		}
-
-		// validate the response and extract the device id
-		if response.DeviceID == "" {
-			rs.Logger.Error("device id not found in the registration response")
-			return
-		}
-		if response.JWTToken == "" {
-			rs.Logger.Error("jwt token not found in the registration response")
-			return
-		}
-
-		// save the jwt token securely
-		if err := rs.JWTManager.SaveJWT(response.JWTToken); err != nil {
-			rs.Logger.WithError(err).Error("failed to save jwt token")
-			return
-		}
-
-		// send the device id to the response channel
-		responseChannel <- response.DeviceID
-	})
-
-	token.Wait()
-	if err := token.Error(); err != nil {
-		rs.Logger.WithError(err).Error("failed to subscribe to registration response topic")
-		return
-	}
 }

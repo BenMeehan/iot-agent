@@ -96,7 +96,7 @@ func jwtDecodeBase64(input string) (string, error) {
 // It verifies the token structure, required claims, and expiration.
 func (jm *JWTManager) IsJWTValid() (bool, error) {
 	if jm.Token == "" {
-		return false, errors.New("JWT token is empty")
+		return false, nil
 	}
 
 	// Split the token into its three parts: header, payload, and signature.
@@ -123,12 +123,12 @@ func (jm *JWTManager) IsJWTValid() (bool, error) {
 	}
 
 	// Check for other custom claims if required (e.g., "iss", "aud").
-	if iss, ok := claims["iss"].(string); !ok || iss == "" {
-		return false, errors.New("JWT issuer (iss) claim missing or invalid")
-	}
-	if aud, ok := claims["aud"].(string); !ok || aud == "" {
-		return false, errors.New("JWT audience (aud) claim missing or invalid")
-	}
+	// if iss, ok := claims["iss"].(string); !ok || iss == "" {
+	// 	return false, errors.New("JWT issuer (iss) claim missing or invalid")
+	// }
+	// if aud, ok := claims["aud"].(string); !ok || aud == "" {
+	// 	return false, errors.New("JWT audience (aud) claim missing or invalid")
+	// }
 
 	// Check expiration time.
 	expiryTime := time.Unix(int64(exp), 0)

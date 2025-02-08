@@ -63,6 +63,7 @@ func main() {
 	}
 
 	JWTManager := jwt.NewJWTManager(config.Security.JWTFile, fileClient, EncryptionManager)
+	JWTManager.LoadJWT()
 
 	// Create a new service registry to manage services
 	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient, EncryptionManager, JWTManager, log)

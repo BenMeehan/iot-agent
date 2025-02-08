@@ -8,7 +8,7 @@ identity:
 
 security:
   jwt_file: "secrets/jwt.bin"
-  aes_key_file: "secrets/aes.key"
+  aes_key_file: "secrets/aes_key"
 
 services:
   registration:
@@ -55,4 +55,4 @@ services:
     qos: 2
     update_file_path: "updates"
     state_file: "configs/update_state.json"
-    enabled: true
+    enabled: false

@@ -8,10 +8,10 @@ type RegistrationPayload struct {
 	ClientID string `json:"client_id,omitempty"`
 
 	// DeviceID is the unique identifier for the device.
-	DeviceID string `json:"id,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
 
 	// Name represents the name of the device.
-	Name string `json:"name,omitempty"`
+	Name string `json:"device_name,omitempty"`
 
 	// OrgID represents the organization ID to which the device belongs.
 	OrgID string `json:"org_id,omitempty"`
