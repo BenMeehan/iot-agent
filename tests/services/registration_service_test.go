@@ -1,46 +1,158 @@
 package services_test
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/tests/mocks"
+	MQTT "github.com/eclipse/paho.mqtt.golang"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-func TestRegistrationService_Start(t *testing.T) {
-	mockMQTTClient := new(mocks.MockMQTTClient)
-	mockFileOps := new(mocks.MockFileOperations)
-	mockDeviceInfo := new(mocks.MockDeviceInfo)
-	mockToken := new(mocks.MockToken)
+func TestRegistrationService_Start_Success(t *testing.T) {
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockFileClient := new(mocks.FileOperations)
+	mockJWTManager := new(mocks.JWTManagerInterface)
+	mockEncryption := new(mocks.EncryptionManagerInterface)
+	mockMqttClient := new(mocks.MQTTClient)
+	logger := logrus.New()
 
-	// Setup expectations for file operations
-	mockFileOps.On("ReadFile", "secrets/.device.secret.PSK.txt").Return("secret", nil)
-	mockDeviceInfo.On("GetDeviceID").Return("")
-	mockDeviceInfo.On("SaveDeviceID", "device123").Return(nil)
+	mockDeviceInfo.On("GetDeviceID").Return("existing-device-id")
+	mockJWTManager.On("IsJWTValid").Return(true, nil)
 
-	// Setup expectations for MQTT operations
-	mockMQTTClient.On("Publish", "iot-registration", byte(2), false, mock.Anything).Return(mockToken)
-	mockMQTTClient.On("Subscribe", "iot-registration/response/test-client", byte(2), mock.Anything).Return(mockToken)
-	mockToken.On("Wait").Return(true)
-	mockToken.On("Error").Return(nil)
-
-	service := &services.RegistrationService{
-		PubTopic:         "iot-registration",
-		DeviceSecretFile: "secrets/.device.secret.PSK.txt",
-		ClientID:         "test-client",
-		QOS:              2,
-		DeviceInfo:       mockDeviceInfo,
-		MqttClient:       mockMQTTClient,
-		FileClient:       mockFileOps,
+	rs := &services.RegistrationService{
+		PubTopic:          "test/topic",
+		ClientID:          "test-client",
+		QOS:               1,
+		DeviceInfo:        mockDeviceInfo,
+		MqttClient:        mockMqttClient,
+		FileClient:        mockFileClient,
+		JWTManager:        mockJWTManager,
+		EncryptionManager: mockEncryption,
+		MaxBackoffSeconds: 10,
+		Logger:            logger,
 	}
 
-	err := service.Start()
+	err := rs.Start()
 	assert.NoError(t, err)
+	mockDeviceInfo.AssertExpectations(t)
+	mockJWTManager.AssertExpectations(t)
+}
 
-	// Verify expectations
-	mockMQTTClient.AssertCalled(t, "Publish", "iot-registration", byte(2), false, mock.Anything)
-	mockMQTTClient.AssertCalled(t, "Subscribe", "iot-registration/response/test-client", byte(2), mock.Anything)
-	mockDeviceInfo.AssertCalled(t, "SaveDeviceID", "device123")
+func TestRegistrationService_Start_InvalidJWT(t *testing.T) {
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockFileClient := new(mocks.FileOperations)
+	mockJWTManager := new(mocks.JWTManagerInterface)
+	mockEncryption := new(mocks.EncryptionManagerInterface)
+	mockMqttClient := new(mocks.MQTTClient)
+	logger := logrus.New()
+
+	mockDeviceInfo.On("GetDeviceID").Return("existing-device-id")
+	mockJWTManager.On("IsJWTValid").Return(false, errors.New("invalid JWT"))
+
+	rs := &services.RegistrationService{
+		PubTopic:          "test/topic",
+		ClientID:          "test-client",
+		QOS:               1,
+		DeviceInfo:        mockDeviceInfo,
+		MqttClient:        mockMqttClient,
+		FileClient:        mockFileClient,
+		JWTManager:        mockJWTManager,
+		EncryptionManager: mockEncryption,
+		MaxBackoffSeconds: 10,
+		Logger:            logger,
+	}
+
+	err := rs.Start()
+	assert.Error(t, err)
+	mockDeviceInfo.AssertExpectations(t)
+	mockJWTManager.AssertExpectations(t)
+}
+
+func TestRegistrationService_Register_Success(t *testing.T) {
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockFileClient := new(mocks.FileOperations)
+	mockJWTManager := new(mocks.JWTManagerInterface)
+	mockEncryption := new(mocks.EncryptionManagerInterface)
+	mockMqttClient := new(mocks.MQTTClient)
+	mockMqttToken := new(mocks.MockToken)
+	logger := logrus.New()
+
+	payload := models.RegistrationPayload{
+		ClientID: "test-client",
+		Name:     "test-device",
+		OrgID:    "test-org",
+	}
+
+	// Mock encryption
+	mockEncryption.On("Encrypt", mock.Anything).Return([]byte("encrypted-payload"), nil)
+
+	// Mock MQTT publish and subscribe
+	mockMqttToken.On("Wait").Return(true)
+	mockMqttToken.On("Error").Return(nil)
+	mockMqttClient.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(mockMqttToken)
+
+	mockMqttClient.On("Subscribe", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			// Correctly typecast the callback
+			callback := args.Get(2).(MQTT.MessageHandler)
+
+			// Simulate an MQTT response message
+			mockMsg := mocks.NewMockMessage("test/topic/response/test-client", []byte(`{"device_id":"test-device-id", "jwt_token":"test-jwt-token"}`))
+			callback(nil, mockMsg) // Invoke callback
+		}).
+		Return(mockMqttToken)
+
+	// Mock saving JWT and Device ID
+	mockJWTManager.On("SaveJWT", "test-jwt-token").Return(nil).Once()
+	mockDeviceInfo.On("SaveDeviceID", "test-device-id").Return(nil).Once()
+
+	rs := &services.RegistrationService{
+		PubTopic:          "test/topic",
+		ClientID:          "test-client",
+		QOS:               1,
+		DeviceInfo:        mockDeviceInfo,
+		MqttClient:        mockMqttClient,
+		FileClient:        mockFileClient,
+		JWTManager:        mockJWTManager,
+		EncryptionManager: mockEncryption,
+		MaxBackoffSeconds: 10,
+		Logger:            logger,
+	}
+
+	// Run the registration
+	err := rs.Register(payload)
+
+	// Assertions
+	assert.NoError(t, err)
+	mockEncryption.AssertExpectations(t)
+	mockMqttClient.AssertExpectations(t)
+	mockJWTManager.AssertExpectations(t)
+	mockDeviceInfo.AssertExpectations(t)
+}
+
+func TestRegistrationService_Register_FailEncrypt(t *testing.T) {
+	mockEncryption := new(mocks.EncryptionManagerInterface)
+	mockMqttClient := new(mocks.MQTTClient)
+	logger := logrus.New()
+
+	payload := models.RegistrationPayload{ClientID: "test-client"}
+	mockEncryption.On("Encrypt", mock.Anything).Return(nil, errors.New("encryption error"))
+
+	rs := &services.RegistrationService{
+		PubTopic:          "test/topic",
+		ClientID:          "test-client",
+		QOS:               1,
+		MqttClient:        mockMqttClient,
+		EncryptionManager: mockEncryption,
+		Logger:            logger,
+	}
+
+	err := rs.Register(payload)
+	assert.Error(t, err)
+	mockEncryption.AssertExpectations(t)
 }
