@@ -94,6 +94,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				DeviceInfo: deviceInfo,
 				QOS:        config.Services.Heartbeat.QOS,
 				MqttClient: sr.mqttClient,
+				JWTManager: sr.jwtManager,
 				Logger:     sr.Logger,
 			}
 		},
