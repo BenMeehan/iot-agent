@@ -16,12 +16,12 @@ build:
 	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
 
 deps:
-   @echo "Installing dependencies..."
-   $(GO) mod tidy
+	@echo "Installing dependencies..."
+    $(GO) mod tidy
 
 lint:
- 	@echo "Running linter..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "Running linter..."
+	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	golangci-lint run
 
 clean:
