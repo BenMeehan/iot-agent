@@ -1,26 +1,40 @@
-GO = go
-BUILD_DIR = bin
-BUILD_BINARY = $(BUILD_DIR)/agent
-PKG = ./...
+name: CI Pipeline
 
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
-all: test build
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-test:
-	@echo "Running tests..."
-	$(GO) test $(PKG) -v
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-build:
-	@echo "Building the project..."
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: '1.23'
 
-lint:
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	golangci-lint run
+    - name: Install dependencies
+      run: make deps
 
-clean:
-	@echo "Cleaning up..."
-	@rm -rf $(BUILD_DIR)
+    - name: Run linting
+      run: make lint
 
-.PHONY: all test build clean
+    - name: Run tests
+      run: make test
+
+    - name: Build project
+      run: make build
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: agent
+        path: bin/agent
