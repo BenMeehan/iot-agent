@@ -127,7 +127,10 @@ func (m *MetricsService) Start() error {
 		return err
 	}
 
-	for range time.Tick(m.Interval) {
+	ticker := time.NewTicker(m.Interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
 		metrics := m.CollectMetrics(config)
 		metrics.DeviceID = m.DeviceInfo.GetDeviceID()
 		if err := m.PublishMetrics(metrics); err != nil {
