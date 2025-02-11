@@ -20,7 +20,7 @@ services:
     topic: "iot-heartbeat"
     interval: 10
     qos: 1
-    enabled: false
+    enabled: true
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"

@@ -133,7 +133,7 @@ func (jm *JWTManager) IsJWTValid() (bool, error) {
 	// Check expiration time.
 	expiryTime := time.Unix(int64(exp), 0)
 	if time.Now().After(expiryTime) {
-		return false, errors.New("JWT token is expired")
+		return false, nil
 	}
 
 	return true, nil
