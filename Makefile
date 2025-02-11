@@ -17,7 +17,7 @@ build:
 
 deps:
 	@echo "Installing dependencies..."
-    $(GO) mod tidy
+	$(GO) mod tidy
 
 lint:
 	@echo "Running linter..."
