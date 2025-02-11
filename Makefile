@@ -1,40 +1,22 @@
-name: CI Pipeline
+GO = go
+BUILD_DIR = bin
+BUILD_BINARY = $(BUILD_DIR)/agent
+PKG = ./...
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+all: test build
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+test:
+	@echo "Running tests..."
+	$(GO) test $(PKG) -v
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23'
+build:
+	@echo "Building the project..."
+	@mkdir -p $(BUILD_DIR)
+	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
 
-    - name: Install dependencies
-      run: make deps
+clean:
+	@echo "Cleaning up..."
+	@rm -rf $(BUILD_DIR)
 
-    - name: Run linting
-      run: make lint
-
-    - name: Run tests
-      run: make test
-
-    - name: Build project
-      run: make build
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: agent
-        path: bin/agent
+.PHONY: all test build clean
