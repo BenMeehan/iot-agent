@@ -181,7 +181,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		u.setState(constants.StateFailure)
+		err = u.setState(constants.StateFailure)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to set state to failure")
+		}
 		u.Logger.WithError(err).Error("Failed to parse update command payload")
 		return
 	}
@@ -194,7 +197,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Check if the version is newer
 	isNew, err := u.isNewVersion(payload.Version)
 	if err != nil {
-		u.setState(constants.StateFailure)
+		err = u.setState(constants.StateFailure)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to set state to failure")
+		}
 		u.Logger.WithError(err).Error("Failed to check version")
 		return
 	}
@@ -207,16 +213,30 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	// Proceed with the update process
-	u.setState(constants.StateDownloading)
+	err = u.setState(constants.StateDownloading)
+	if err != nil {
+		u.Logger.WithError(err).Error("Failed to set state to downloading")
+	}
+
 	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
-		u.setState(constants.StateFailure)
+		err = u.setState(constants.StateFailure)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to set state to failure")
+		}
 		u.Logger.WithError(err).Error("Failed to download update file")
 		return
 	}
 
-	u.setState(constants.StateVerifying)
+	err = u.setState(constants.StateVerifying)
+	if err != nil {
+		u.Logger.WithError(err).Error("Failed to set state to verifying")
+	}
+
 	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
-		u.setState(constants.StateFailure)
+		err = u.setState(constants.StateFailure)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to set state to failure")
+		}
 		u.Logger.WithError(err).Error("Failed to verify update")
 		return
 	}
@@ -224,9 +244,16 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
 	extractedDir := u.UpdateFilePath
 
-	u.setState(constants.StateInstalling)
+	err = u.setState(constants.StateInstalling)
+	if err != nil {
+		u.Logger.WithError(err).Error("Failed to set state to installing")
+	}
+
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
-		u.setState(constants.StateFailure)
+		err = u.setState(constants.StateFailure)
+		if err != nil {
+			u.Logger.WithError(err).Error("Failed to set state to failure")
+		}
 		u.Logger.WithError(err).Error("Failed to apply update, starting rollback")
 
 		// Rollback on failure
@@ -234,7 +261,11 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		return
 	}
 
-	u.setState(constants.StateSuccess)
+	err = u.setState(constants.StateSuccess)
+	if err != nil {
+		u.Logger.WithError(err).Error("Failed to set state to success")
+	}
+
 	u.Logger.Info("Update installed successfully")
 }
 

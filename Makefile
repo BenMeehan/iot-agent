@@ -3,29 +3,33 @@ BUILD_DIR = bin
 BUILD_BINARY = $(BUILD_DIR)/agent
 PKG = ./...
 
-
-all: test build
-
-test:
-	@echo "Running tests..."
-	$(GO) test $(PKG) -v
-
-build:
-	@echo "Building the project..."
-	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
+all: deps lint test build
 
 deps:
-	@echo "Installing dependencies..."
+	@echo "[INFO] Installing dependencies..."
 	$(GO) mod tidy
+	@echo "[SUCCESS] Dependencies installed."
 
 lint:
-	@echo "Running linter..."
+	@echo "[INFO] Running linter..."
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	golangci-lint run
+	@echo "[SUCCESS] Linting completed."
+
+test:
+	@echo "[INFO] Running tests..."
+	$(GO) test $(PKG) -v
+	@echo "[SUCCESS] Tests completed."
+
+build:
+	@echo "[INFO] Building the project..."
+	@mkdir -p $(BUILD_DIR)
+	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
+	@echo "[SUCCESS] Build completed. Binary available at $(BUILD_BINARY)"
 
 clean:
-	@echo "Cleaning up..."
+	@echo "[INFO] Cleaning up..."
 	@rm -rf $(BUILD_DIR)
+	@echo "[SUCCESS] Cleanup completed."
 
-.PHONY: all test build clean
+.PHONY: all test build clean deps lint

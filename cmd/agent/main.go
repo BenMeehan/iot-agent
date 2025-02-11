@@ -63,7 +63,10 @@ func main() {
 	}
 
 	JWTManager := jwt.NewJWTManager(config.Security.JWTFile, fileClient, EncryptionManager)
-	JWTManager.LoadJWT()
+	err = JWTManager.LoadJWT()
+	if err != nil {
+		log.WithError(err).Fatal("failed to load JWT")
+	}
 
 	// Create a new service registry to manage services
 	serviceRegistry := services.NewServiceRegistry(mqttClient, fileClient, EncryptionManager, JWTManager, log)
