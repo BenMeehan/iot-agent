@@ -19,16 +19,19 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v3
       with:
-        go-version: '1.23' 
+        go-version: '1.23'
 
     - name: Install dependencies
-      run: go mod tidy
+      run: make deps
+
+    - name: Run linting
+      run: make lint
 
     - name: Run tests
-      run: go test ./... -v
+      run: make test
 
     - name: Build project
-      run: go build -o bin/agent ./cmd/agent
+      run: make build
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v3

@@ -15,6 +15,10 @@ build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
 
+lint:
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	golangci-lint run
+
 clean:
 	@echo "Cleaning up..."
 	@rm -rf $(BUILD_DIR)
