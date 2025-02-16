@@ -18,3 +18,14 @@ type ProcessMetrics struct {
 	CPUUsage *float64 `json:"cpu_usage,omitempty"`
 	Memory   *float64 `json:"memory,omitempty"`
 }
+
+// MetricsConfig defines the structure of the config file for the metrics to be monitored
+type MetricsConfig struct {
+	MonitorCPU     bool     `json:"monitor_cpu"`
+	MonitorMemory  bool     `json:"monitor_memory"`
+	MonitorDisk    bool     `json:"monitor_disk"`
+	MonitorNetwork bool     `json:"monitor_network"`
+	ProcessNames   []string `json:"process_names"`
+	MonitorProcCPU bool     `json:"monitor_proc_cpu"`
+	MonitorProcMem bool     `json:"monitor_proc_mem"`
+}

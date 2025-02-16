@@ -15,13 +15,13 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
+	"github.com/rs/zerolog"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
-	"github.com/sirupsen/logrus"
 )
 
 // UpdateService struct with FSM
@@ -31,7 +31,7 @@ type UpdateService struct {
 	QOS              int
 	MqttClient       mqtt.MQTTClient
 	FileClient       file.FileOperations
-	Logger           *logrus.Logger
+	Logger           zerolog.Logger
 	StateFile        string
 	UpdateFilePath   string
 	state            constants.UpdateState
@@ -54,12 +54,33 @@ func (u *UpdateService) Start() error {
 
 	// Resume from the current state if possible
 	if err := u.ResumeFromState(); err != nil {
-		u.Logger.WithError(err).Error("Failed to resume update process")
+		u.Logger.Error().Err(err).Msg("Failed to resume update process")
 	}
 
 	// Subscribe to MQTT update commands
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
 	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
+	u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
+
+	return nil
+}
+
+// Stop gracefully stops the UpdateService
+func (u *UpdateService) Stop() error {
+	u.Logger.Info().Msg("Stopping UpdateService...")
+
+	// Unsubscribe from the MQTT topic
+	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
+	u.MqttClient.Unsubscribe(topic)
+	u.Logger.Info().Str("topic", topic).Msg("Unsubscribed from MQTT update topic")
+
+	// Clean up temporary files
+	if err := os.RemoveAll(u.UpdateFilePath); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to clean up update files")
+		return err
+	}
+
+	u.Logger.Info().Msg("UpdateService stopped successfully")
 	return nil
 }
 
@@ -103,11 +124,11 @@ func (u *UpdateService) EnsureStateFileExists() error {
 		initialState := struct{ State constants.UpdateState }{}
 
 		if err := u.FileClient.WriteJsonFile(u.StateFile, initialState); err != nil {
-			u.Logger.WithError(err).Error("Failed to create state file")
+			u.Logger.Error().Err(err).Msg("Failed to create state file")
 			return err
 		}
 
-		u.Logger.Info("State file created and initialized as empty")
+		u.Logger.Info().Msg("State file created and initialized as empty")
 	}
 	return nil
 }
@@ -116,21 +137,22 @@ func (u *UpdateService) EnsureStateFileExists() error {
 func (u *UpdateService) setState(newState constants.UpdateState) error {
 	if !u.isValidTransition(newState) {
 		err := errors.New("invalid state transition")
-		u.Logger.WithFields(logrus.Fields{
-			"currentState": u.state,
-			"newState":     newState,
-		}).WithError(err).Error("State transition denied")
+		u.Logger.Error().
+			Str("currentState", string(u.state)).
+			Str("newState", string(newState)).
+			Err(err).
+			Msg("State transition denied")
 		return err
 	}
 
 	u.state = newState
 	stateData := struct{ State constants.UpdateState }{newState}
 	if err := u.FileClient.WriteJsonFile(u.StateFile, stateData); err != nil {
-		u.Logger.WithError(err).Error("Failed to persist state")
+		u.Logger.Error().Err(err).Msg("Failed to persist state")
 		return err
 	}
 
-	u.Logger.WithField("state", newState).Info("Update state updated")
+	u.Logger.Info().Str("state", string(newState)).Msg("Update state updated")
 	return nil
 }
 
@@ -139,20 +161,20 @@ func (u *UpdateService) ResumeFromState() error {
 	// Read the current state from the state file
 	stateData, err := u.FileClient.ReadFile(u.StateFile)
 	if err != nil {
-		u.Logger.WithError(err).Error("Failed to read state file, starting fresh")
+		u.Logger.Error().Err(err).Msg("Failed to read state file, starting fresh")
 		u.state = constants.StateDownloading // Default initial state
 		return nil
 	}
 
 	var stateStruct struct{ State constants.UpdateState }
 	if err := json.Unmarshal([]byte(stateData), &stateStruct); err != nil {
-		u.Logger.WithError(err).Error("Failed to parse state file, starting fresh")
+		u.Logger.Error().Err(err).Msg("Failed to parse state file, starting fresh")
 		u.state = constants.StateDownloading
 		return nil
 	}
 
 	u.state = stateStruct.State
-	u.Logger.WithField("state", u.state).Info("Resuming update process from state")
+	u.Logger.Info().Str("state", string(u.state)).Msg("Resuming update process from state")
 
 	// Continue the process based on the current state
 	switch u.state {
@@ -169,143 +191,124 @@ func (u *UpdateService) ResumeFromState() error {
 		extractedDir := u.UpdateFilePath
 		return u.applyUpdate(instructionFile, extractedDir)
 	default:
-		u.Logger.Info("No action required for terminal state")
+		u.Logger.Info().Msg("No action required for terminal state")
 		return nil
 	}
 }
 
-// handleUpdateCommand updated to include version check with enhanced logging
+// handleUpdateCommand processes incoming MQTT update commands
 func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message) {
-	u.Logger.Info("Received update command")
+	u.Logger.Info().Msg("Received update command")
 
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		err = u.setState(constants.StateFailure)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to set state to failure")
-		}
-		u.Logger.WithError(err).Error("Failed to parse update command payload")
+		u.setState(constants.StateFailure)
+		u.Logger.Error().Err(err).Msg("Failed to parse update command payload")
 		return
 	}
 
-	u.Logger.WithFields(logrus.Fields{
-		"UpdateURL": payload.UpdateURL,
-		"Version":   payload.Version,
-	}).Info("Parsed update command payload")
+	u.Logger.Info().
+		Str("UpdateURL", payload.UpdateURL).
+		Str("Version", payload.Version).
+		Msg("Parsed update command payload")
 
 	// Check if the version is newer
 	isNew, err := u.isNewVersion(payload.Version)
 	if err != nil {
-		err = u.setState(constants.StateFailure)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to set state to failure")
-		}
-		u.Logger.WithError(err).Error("Failed to check version")
+		u.setState(constants.StateFailure)
+		u.Logger.Error().Err(err).Msg("Failed to check version")
 		return
 	}
 
 	if !isNew {
-		u.Logger.WithFields(logrus.Fields{
-			"receivedVersion": payload.Version,
-		}).Info("Received version is not newer or is equal to the current version. Update aborted.")
+		u.Logger.Info().
+			Str("receivedVersion", payload.Version).
+			Msg("Received version is not newer or is equal to the current version. Update aborted.")
 		return
 	}
 
 	// Proceed with the update process
-	err = u.setState(constants.StateDownloading)
-	if err != nil {
-		u.Logger.WithError(err).Error("Failed to set state to downloading")
+	if err := u.setState(constants.StateDownloading); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to set state to downloading")
 	}
 
 	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
-		err = u.setState(constants.StateFailure)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to set state to failure")
-		}
-		u.Logger.WithError(err).Error("Failed to download update file")
+		u.setState(constants.StateFailure)
+		u.Logger.Error().Err(err).Msg("Failed to download update file")
 		return
 	}
 
-	err = u.setState(constants.StateVerifying)
-	if err != nil {
-		u.Logger.WithError(err).Error("Failed to set state to verifying")
+	if err := u.setState(constants.StateVerifying); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to set state to verifying")
 	}
 
 	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
-		err = u.setState(constants.StateFailure)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to set state to failure")
-		}
-		u.Logger.WithError(err).Error("Failed to verify update")
+		u.setState(constants.StateFailure)
+		u.Logger.Error().Err(err).Msg("Failed to verify update")
 		return
 	}
 
 	instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
 	extractedDir := u.UpdateFilePath
 
-	err = u.setState(constants.StateInstalling)
-	if err != nil {
-		u.Logger.WithError(err).Error("Failed to set state to installing")
+	if err := u.setState(constants.StateInstalling); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to set state to installing")
 	}
 
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
-		err = u.setState(constants.StateFailure)
-		if err != nil {
-			u.Logger.WithError(err).Error("Failed to set state to failure")
-		}
-		u.Logger.WithError(err).Error("Failed to apply update, starting rollback")
+		u.setState(constants.StateFailure)
+		u.Logger.Error().Err(err).Msg("Failed to apply update, starting rollback")
 
 		// Rollback on failure
 		u.rollbackFiles([]models.UpdateInstruction{})
 		return
 	}
 
-	err = u.setState(constants.StateSuccess)
-	if err != nil {
-		u.Logger.WithError(err).Error("Failed to set state to success")
+	if err := u.setState(constants.StateSuccess); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to set state to success")
 	}
 
-	u.Logger.Info("Update installed successfully")
+	u.Logger.Info().Msg("Update installed successfully")
 }
 
 // downloadUpdateFile downloads the encrypted update file from the provided URL
 func (u *UpdateService) downloadUpdateFile(url string) error {
-	u.Logger.WithField("url", url).Info("Downloading update file...")
+	u.Logger.Info().Str("url", url).Msg("Downloading update file...")
 
 	resp, err := http.Get(url)
 	if err != nil {
-		u.Logger.WithError(err).Error("Error initiating download")
+		u.Logger.Error().Err(err).Msg("Error initiating download")
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		err := errors.New("error downloading update file, received non-OK status")
-		u.Logger.WithField("statusCode", resp.StatusCode).WithError(err).Error("Download failed")
+		u.Logger.Info().Str("statusCode", string(resp.StatusCode)).Err(err).Msg("Download failed")
 		return err
 	}
 
 	// Ensure the update file path directory exists
 	if err := os.MkdirAll(u.UpdateFilePath, os.ModePerm); err != nil {
-		u.Logger.WithError(err).Error("Failed to create update file path directory")
+		u.Logger.Error().Err(err).Msg("Failed to create update file path directory")
 		return err
 	}
 
 	file, err := os.Create(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"))
 	if err != nil {
-		u.Logger.WithError(err).Error("Failed to create file for saving the update")
+		u.Logger.Error().Err(err).Msg("Failed to create file for saving the update")
 		return err
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
-		u.Logger.WithError(err).Error("Error writing the downloaded content to file")
+		u.Logger.Error().Err(err).Msg("Error writing the downloaded content to file")
 		return err
 	}
 
-	u.Logger.Info("Update file downloaded successfully")
+	u.Logger.Info().Msg("Update file downloaded successfully")
 	return nil
 }
 
@@ -447,7 +450,7 @@ func (u *UpdateService) applyUpdate(instructionFile string, extractedDir string)
 		switch {
 		case inst.NewFile == "-": // Delete operation
 			if err := os.Remove(inst.TargetPath); err != nil {
-				u.Logger.WithError(err).Errorf("Failed to delete file %s", inst.TargetPath)
+				u.Logger.Error().Err(err).Msgf("Failed to delete file %s", inst.TargetPath)
 				u.rollbackFiles(instructions) // Rollback if any operation fails
 				return err
 			}
@@ -467,7 +470,7 @@ func (u *UpdateService) applyUpdate(instructionFile string, extractedDir string)
 		}
 	}
 
-	u.Logger.Info("Update applied successfully")
+	u.Logger.Info().Msg("Update applied successfully")
 	return nil
 }
 
@@ -511,16 +514,16 @@ func (u *UpdateService) rollbackFiles(instructions []models.UpdateInstruction) {
 	for _, inst := range instructions {
 		if inst.NewFile != "-" && inst.TargetPath != "-" {
 			backupPath := filepath.Join(backupDir, filepath.Base(inst.TargetPath))
-			u.Logger.WithFields(logrus.Fields{
-				"backupPath": backupPath,
-				"targetPath": inst.TargetPath,
-			}).Info("Rolling back file")
+			u.Logger.Info().
+				Str("backupPath", backupPath).
+				Str("targetPath", inst.TargetPath).
+				Msg("Rolling back file")
 			if err := u.copyFile(backupPath, inst.TargetPath); err != nil {
-				u.Logger.WithError(err).Errorf("Failed to restore file from backup: %s", inst.TargetPath)
+				u.Logger.Error().Err(err).Msgf("Failed to restore file from backup: %s", inst.TargetPath)
 			}
 		}
 	}
-	u.Logger.Warn("Update rollback completed")
+	u.Logger.Warn().Msg("Update rollback completed")
 }
 
 // copyFile copies a file from src to dst
@@ -583,16 +586,16 @@ func (u *UpdateService) EnsureVersionFileExists() error {
 	if _, err := os.Stat(versionFilePath); os.IsNotExist(err) {
 		// Create the version.txt file with the default version
 		if err := os.MkdirAll(filepath.Dir(versionFilePath), os.ModePerm); err != nil {
-			u.Logger.WithError(err).Error("Failed to create directory for version file")
+			u.Logger.Error().Err(err).Msg("Failed to create directory for version file")
 			return err
 		}
 
 		if err := u.FileClient.WriteFile(versionFilePath, defaultVersion); err != nil {
-			u.Logger.WithError(err).Error("Failed to create version.txt file")
+			u.Logger.Error().Err(err).Msg("Failed to create version.txt file")
 			return err
 		}
 
-		u.Logger.WithField("defaultVersion", defaultVersion).Info("version.txt file created and initialized")
+		u.Logger.Info().Str("defaultVersion", defaultVersion).Msg("version.txt file created and initialized")
 	}
 	return nil
 }

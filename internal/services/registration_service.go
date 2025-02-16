@@ -9,6 +9,7 @@ import (
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
+	"github.com/rs/zerolog"
 
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
@@ -16,11 +17,9 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
-	"github.com/sirupsen/logrus"
 )
 
-// RegistrationService manages the device registration process
-// and handles the publishing of registration requests and processing of responses.
+// RegistrationService manages the device registration process.
 type RegistrationService struct {
 	PubTopic          string
 	ClientID          string
@@ -31,36 +30,43 @@ type RegistrationService struct {
 	JWTManager        jwt.JWTManagerInterface
 	EncryptionManager encryption.EncryptionManagerInterface
 	MaxBackoffSeconds int
-	Logger            *logrus.Logger
+	Logger            zerolog.Logger
+	stopChan          chan struct{}
+	running           bool
 }
 
 // Start initiates the device registration process.
-// If the device is already registered and its JWT is valid, it skips re-registration.
-// Otherwise, it handles registration or re-registration if required.
 func (rs *RegistrationService) Start() error {
-	rs.Logger.Infof("Starting registration process for client: %s", rs.ClientID)
+	if rs.running {
+		rs.Logger.Warn().Msg("RegistrationService is already running")
+		return errors.New("registration service is already running")
+	}
 
-	// Check if the device is already registered
+	rs.stopChan = make(chan struct{})
+	rs.running = true
+
+	rs.Logger.Info().Str("client_id", rs.ClientID).Msg("Starting registration process")
+
 	existingDeviceID := rs.DeviceInfo.GetDeviceID()
 	if existingDeviceID != "" {
-		rs.Logger.Infof("Found existing device ID: %s", existingDeviceID)
+		rs.Logger.Info().Str("device_id", existingDeviceID).Msg("Found existing device ID")
 
-		// Check if the JWT token is still valid
+		// Check if the JWT token is valid
 		valid, err := rs.JWTManager.IsJWTValid()
 		if err != nil {
-			rs.Logger.WithError(err).Error("Failed to check JWT token validity")
+			rs.Logger.Error().Err(err).Msg("Failed to check JWT token validity")
 			return err
 		}
 
 		if !valid {
-			rs.Logger.Warn("JWT token is invalid, attempting re-registration")
+			rs.Logger.Warn().Msg("JWT token is invalid, attempting re-registration")
 			payload := models.RegistrationPayload{
 				DeviceID: existingDeviceID,
 			}
 			return rs.retryRegistration(payload)
 		}
 
-		rs.Logger.Infof("Device %s is already registered and JWT is valid", rs.ClientID)
+		rs.Logger.Info().Str("client_id", rs.ClientID).Msg("Device is already registered and JWT is valid")
 		return nil
 	}
 
@@ -76,115 +82,130 @@ func (rs *RegistrationService) Start() error {
 	return rs.retryRegistration(payload)
 }
 
-// retryRegistration implements retries with exponential backoff for the registration process.
+// retryRegistration implements retries with exponential backoff for registration.
 func (rs *RegistrationService) retryRegistration(payload models.RegistrationPayload) error {
-	backoff := 1 * time.Second // Initial backoff duration
+	backoff := 1 * time.Second
 	maxBackoff := time.Duration(rs.MaxBackoffSeconds) * time.Second
 	retryCount := 0
 
 	for {
 		retryCount++
-		rs.Logger.Infof("Attempt %d: Registering device...", retryCount)
+		rs.Logger.Info().Int("attempt", retryCount).Msg("Registering device")
 
 		err := rs.Register(payload)
 		if err == nil {
-			rs.Logger.Infof("Device registration succeeded after %d attempts", retryCount)
+			rs.Logger.Info().Int("attempts", retryCount).Msg("Device registration succeeded")
 			return nil
 		}
 
-		rs.Logger.WithError(err).Warnf("Registration attempt %d failed, retrying after %s", retryCount, backoff)
+		rs.Logger.Warn().Err(err).Int("attempt", retryCount).Dur("backoff", backoff).Msg("Registration failed, retrying")
 
-		// Sleep for the backoff duration
-		time.Sleep(backoff)
-
-		// Exponential backoff with jitter
-		backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
-		backoff = backoff + time.Duration(rand.Intn(1000))*time.Millisecond // Add random jitter
+		select {
+		case <-time.After(backoff):
+			// Exponential backoff with jitter
+			backoff = time.Duration(math.Min(float64(backoff*2), float64(maxBackoff)))
+			backoff = backoff + time.Duration(rand.Intn(1000))*time.Millisecond
+		case <-rs.stopChan:
+			rs.Logger.Warn().Msg("RegistrationService stopped during retry")
+			return errors.New("registration service stopped")
+		}
 	}
 }
 
-// Register handles the device registration by publishing a request to the MQTT broker
-// and waits for a response from the broker to confirm the registration.
+// Register handles device registration by publishing a request and processing the response.
 func (rs *RegistrationService) Register(payload models.RegistrationPayload) error {
-	// Serialize the registration payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return errors.New("failed to serialize registration payload")
 	}
 
-	// Encrypt the serialized payload
+	// Encrypt payload
 	encryptedPayload, err := rs.EncryptionManager.Encrypt(payloadBytes)
 	if err != nil {
-		rs.Logger.WithError(err).Error("Failed to encrypt registration payload")
+		rs.Logger.Error().Err(err).Msg("Failed to encrypt registration payload")
 		return err
 	}
 
-	// Create a channel to receive the response
-	responseChannel := make(chan string, 1)
-
-	// Subscribe to the response topic before publishing the request
+	// Subscribe to response topic
 	var respTopic string
 	if payload.DeviceID != "" {
-		respTopic = rs.PubTopic + "/response/" + payload.DeviceID
+		respTopic = fmt.Sprintf("%s/response/%s", rs.PubTopic, payload.DeviceID)
 	} else {
-		respTopic = rs.PubTopic + "/response/" + rs.ClientID
+		respTopic = fmt.Sprintf("%s/response/%s", rs.PubTopic, rs.ClientID)
 	}
-	rs.Logger.Infof("Subscribing to response topic: %s", respTopic)
 
+	rs.Logger.Info().Str("topic", respTopic).Msg("Subscribing to response topic")
+
+	responseChannel := make(chan string, 1)
 	token := rs.MqttClient.Subscribe(respTopic, byte(rs.QOS), func(client MQTT.Client, msg MQTT.Message) {
 		var response models.RegistrationResponse
 		if err := json.Unmarshal(msg.Payload(), &response); err != nil {
-			rs.Logger.WithError(err).Error("Error parsing registration response")
+			rs.Logger.Error().Err(err).Msg("Error parsing registration response")
 			return
 		}
 
-		// Validate the response and extract the device ID
 		if response.DeviceID == "" {
-			rs.Logger.Error("Device ID not found in the registration response")
+			rs.Logger.Error().Msg("Device ID not found in the registration response")
 			return
 		}
 		if response.JWTToken == "" {
-			rs.Logger.Error("JWT token not found in the registration response")
+			rs.Logger.Error().Msg("JWT token not found in the registration response")
 			return
 		}
 
-		// Save the JWT token securely
 		if err := rs.JWTManager.SaveJWT(response.JWTToken); err != nil {
-			rs.Logger.WithError(err).Error("Failed to save JWT token")
+			rs.Logger.Error().Err(err).Msg("Failed to save JWT token")
 			return
 		}
 
-		// Send the device ID to the response channel
 		responseChannel <- response.DeviceID
 	})
 
 	token.Wait()
 	if err := token.Error(); err != nil {
-		rs.Logger.WithError(err).Error("Failed to subscribe to registration response topic")
+		rs.Logger.Error().Err(err).Msg("Failed to subscribe to registration response topic")
 		return err
 	}
 
-	// Publish the registration message to the MQTT broker
-	rs.Logger.Infof("Publishing registration request to topic: %s", rs.PubTopic)
+	// Publish the registration message
+	rs.Logger.Info().Str("topic", rs.PubTopic).Msg("Publishing registration request")
 	publishToken := rs.MqttClient.Publish(rs.PubTopic, byte(rs.QOS), false, encryptedPayload)
 	publishToken.Wait()
 	if err := publishToken.Error(); err != nil {
-		rs.Logger.WithError(err).Error("Failed to publish registration message")
+		rs.Logger.Error().Err(err).Msg("Failed to publish registration message")
 		return err
 	}
 
-	// Wait for a response or timeout after 10 seconds
+	// Wait for response with timeout
 	select {
 	case deviceID := <-responseChannel:
-		rs.Logger.Infof("Device registered successfully with ID: %s", deviceID)
+		rs.Logger.Info().Str("device_id", deviceID).Msg("Device registered successfully")
 		if err := rs.DeviceInfo.SaveDeviceID(deviceID); err != nil {
-			rs.Logger.WithError(err).Error("Failed to save device ID to file")
+			rs.Logger.Error().Err(err).Msg("Failed to save device ID")
 			return err
 		}
 	case <-time.After(10 * time.Second):
-		rs.Logger.Errorf("Registration timeout for client: %s, no response received", rs.ClientID)
+		rs.Logger.Error().Str("client_id", rs.ClientID).Msg("Registration timeout, no response received")
 		return fmt.Errorf("registration timeout for client: %s", rs.ClientID)
 	}
 
+	return nil
+}
+
+// Stop gracefully stops the registration process.
+func (rs *RegistrationService) Stop() error {
+	if !rs.running {
+		rs.Logger.Warn().Msg("RegistrationService is not running")
+		return errors.New("registration service is not running")
+	}
+
+	if rs.stopChan == nil {
+		rs.Logger.Error().Msg("Failed to stop RegistrationService: stop channel is nil")
+		return errors.New("stop channel is nil")
+	}
+
+	close(rs.stopChan)
+	rs.running = false
+	rs.Logger.Info().Msg("RegistrationService stopped")
 	return nil
 }

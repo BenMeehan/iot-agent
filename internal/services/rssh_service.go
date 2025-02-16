@@ -13,16 +13,16 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	cmap "github.com/orcaman/concurrent-map/v2"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 	"golang.org/x/crypto/ssh"
 )
 
-// SSHService defines the structure of the SSH service
+// SSHService handles reverse SSH tunneling
 type SSHService struct {
 	SubTopic        string
 	DeviceInfo      identity.DeviceInfoInterface
 	MqttClient      mqtt.MQTTClient
-	Logger          *logrus.Logger
+	Logger          zerolog.Logger
 	BackendHost     string
 	BackendPort     int
 	SSHUser         string
@@ -32,11 +32,12 @@ type SSHService struct {
 	listeners       map[int]net.Listener
 	clientPool      cmap.ConcurrentMap[string, *ssh.Client]
 	clientListeners cmap.ConcurrentMap[string, int]
+	stopChan        chan struct{}
 }
 
-// Start listens for incoming SSH port requests via MQTT and starts the reverse SSH process
+// Start subscribes to MQTT topics and listens for SSH requests
 func (s *SSHService) Start() error {
-	s.Logger.Info("Starting SSH service...")
+	s.Logger.Info().Msg("Starting SSH service...")
 
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
 	if err := s.subscribeToTopic(topic); err != nil {
@@ -46,64 +47,100 @@ func (s *SSHService) Start() error {
 	s.listeners = make(map[int]net.Listener)
 	s.clientPool = cmap.New[*ssh.Client]()
 	s.clientListeners = cmap.New[int]()
+	s.stopChan = make(chan struct{})
+
 	return nil
 }
 
-// subscribeToTopic subscribes to the specified MQTT topic
+// Stop gracefully shuts down the SSH service
+func (s *SSHService) Stop() error {
+	s.Logger.Info().Msg("Stopping SSH service...")
+
+	// Close all active SSH connections
+	s.clientPool.IterCb(func(key string, client *ssh.Client) {
+		s.Logger.Info().Str("backend_host", key).Msg("Closing SSH connection")
+		err := client.Close()
+		if err != nil {
+			s.Logger.Error().Err(err).Msg("Failed to close SSH connection")
+		}
+		s.clientPool.Remove(key)
+	})
+
+	// Close all active listeners
+	for port, listener := range s.listeners {
+		s.Logger.Info().Int("port", port).Msg("Closing SSH listener")
+		err := listener.Close()
+		if err != nil {
+			s.Logger.Error().Err(err).Msg("Failed to close listener")
+			return err
+		}
+		delete(s.listeners, port)
+	}
+
+	// Unsubscribe from MQTT topic
+	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
+	s.Logger.Info().Str("topic", topic).Msg("Unsubscribing from MQTT topic")
+	token := s.MqttClient.Unsubscribe(topic)
+	token.Wait()
+
+	if err := token.Error(); err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to unsubscribe from MQTT topic")
+		return err
+	}
+
+	// Close stop channel
+	close(s.stopChan)
+	s.Logger.Info().Msg("SSH service stopped")
+	return nil
+}
+
+// subscribeToTopic subscribes to the MQTT topic for SSH requests
 func (s *SSHService) subscribeToTopic(topic string) error {
-	s.Logger.WithField("topic", topic).Info("Subscribing to MQTT topic")
+	s.Logger.Info().Str("topic", topic).Msg("Subscribing to MQTT topic")
 
 	token := s.MqttClient.Subscribe(topic, byte(s.QOS), s.handleSSHRequest)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		s.Logger.WithError(err).Error("Failed to subscribe to SSH request topic")
+		s.Logger.Error().Err(err).Msg("Failed to subscribe to SSH request topic")
 		return err
 	}
 
-	s.Logger.Info("Successfully subscribed to SSH request topic")
+	s.Logger.Info().Msg("Successfully subscribed to SSH request topic")
 	return nil
-}
-
-// logAndReturnError logs the error with a message and returns it
-func (s *SSHService) logAndReturnError(message string, err error) error {
-	s.Logger.WithError(err).Error(message)
-	return err
 }
 
 // handleSSHRequest processes the incoming MQTT message with the requested port
 func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 	var request models.SSHRequest
 	if err := json.Unmarshal(msg.Payload(), &request); err != nil {
-		s.Logger.WithError(err).Error("Failed to unmarshal SSH request message")
+		s.Logger.Error().Err(err).Msg("Failed to unmarshal SSH request message")
 		return
 	}
 
-	s.Logger.WithFields(logrus.Fields{
-		"local_port":   request.LocalPort,
-		"remote_port":  request.RemotePort,
-		"backend_host": request.BackendHost,
-	}).Info("Received reverse SSH port request")
+	s.Logger.Info().
+		Int("local_port", request.LocalPort).
+		Int("remote_port", request.RemotePort).
+		Str("backend_host", request.BackendHost).
+		Msg("Received reverse SSH port request")
 
 	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost, request.ServerID); err != nil {
-		s.Logger.WithError(err).Error("Failed to start reverse SSH")
+		s.Logger.Error().Err(err).Msg("Failed to start reverse SSH")
 	}
 }
 
-// startReverseSSH establishes the reverse SSH connection with port forwarding
+// startReverseSSH sets up the reverse SSH tunnel
 func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, serverId string) error {
-	// Read and parse the private SSH key
-	s.Logger.WithField("private_key_path", s.PrivateKeyPath).Info("Reading private SSH key")
+	s.Logger.Info().Str("private_key_path", s.PrivateKeyPath).Msg("Reading private SSH key")
 	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
 	if err != nil {
-		return s.logAndReturnError("Failed to read private SSH key", err)
+		return fmt.Errorf("failed to read private SSH key: %w", err)
 	}
 
 	privateKey, err := ssh.ParsePrivateKey([]byte(key))
 	if err != nil {
-		return s.logAndReturnError("Failed to parse private SSH key", err)
+		return fmt.Errorf("failed to parse private SSH key: %w", err)
 	}
 
-	// SSH client configuration
 	config := &ssh.ClientConfig{
 		User:            s.SSHUser,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(privateKey)},
@@ -111,107 +148,54 @@ func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, ser
 		Timeout:         5 * time.Second,
 	}
 
-	// Get or create an SSH client for the backend host
 	client, exists := s.clientPool.Get(backendHost)
 	if !exists {
 		connStr := fmt.Sprintf("%s:%d", backendHost, s.BackendPort)
-		s.Logger.WithField("connection_string", connStr).Info("Establishing SSH connection")
+		s.Logger.Info().Str("connection_string", connStr).Msg("Establishing SSH connection")
 
 		client, err = ssh.Dial("tcp", connStr, config)
 		if err != nil {
-			return s.logAndReturnError("Failed to establish SSH connection", err)
+			return fmt.Errorf("failed to establish SSH connection: %w", err)
 		}
 
 		s.clientPool.Set(backendHost, client)
 		s.clientListeners.Set(backendHost, 0)
 	}
 
-	// Increment listener count for the backend host
-	s.clientListeners.Upsert(backendHost, 1, func(exists bool, value int, _ int) int {
-		return value + 1
-	})
-
-	// Set up port forwarding
 	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
 	if err != nil {
-		return s.logAndReturnError("Failed to set up port forwarding", err)
+		return fmt.Errorf("failed to set up port forwarding: %w", err)
 	}
 
-	// Store the listener and log the success
 	s.listeners[remotePort] = listener
-	s.Logger.WithFields(logrus.Fields{
-		"local_port":  localPort,
-		"remote_port": remotePort,
-	}).Info("Port forwarding established")
+	s.Logger.Info().
+		Int("local_port", localPort).
+		Int("remote_port", remotePort).
+		Msg("Port forwarding established")
 
 	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
 
-	// Handle incoming connections
 	go s.acceptConnections(listener, remotePort, backendHost, serverId)
 
 	return nil
 }
 
-// acceptConnections accepts incoming connections on the listener and auto-disconnects after 30 seconds
+// acceptConnections handles incoming connections on the listener
 func (s *SSHService) acceptConnections(listener net.Listener, remotePort int, backendHost, serverId string) {
-	// Set a fixed auto-disconnect timer for 30 seconds
-	autoDisconnectTimer := time.NewTimer(30 * time.Second)
-	defer func() {
-		autoDisconnectTimer.Stop()
-		listener.Close()
-		delete(s.listeners, remotePort)
-
-		v, _ := s.clientListeners.Get(backendHost)
-		s.clientListeners.Set(backendHost, v-1)
-
-		// Decrement the listener count for the backend host
-		if count, ok := s.clientListeners.Get(backendHost); ok {
-			newCount := count - 1
-			if newCount > 0 {
-				s.clientListeners.Set(backendHost, newCount)
-			} else {
-				// If no active listeners remain, close the SSH client
-				s.Logger.WithField("backend_host", backendHost).Info("No active listeners, closing SSH client")
-				if client, exists := s.clientPool.Get(backendHost); exists {
-					client.Close()
-					s.clientPool.Remove(backendHost)
-				}
-				s.clientListeners.Remove(backendHost)
-			}
-		}
-
-		s.publishDisconnectRequest(s.DeviceInfo.GetDeviceID(), serverId, listener.Addr().(*net.TCPAddr).Port, remotePort)
-	}()
+	defer listener.Close()
 
 	for {
-		connChan := make(chan net.Conn, 1)
-		errChan := make(chan error, 1)
-
-		go func() {
+		select {
+		case <-s.stopChan:
+			s.Logger.Info().Int("remote_port", remotePort).Msg("Stopping listener")
+			return
+		default:
 			conn, err := listener.Accept()
 			if err != nil {
-				errChan <- err
-			} else {
-				connChan <- conn
+				s.Logger.Error().Err(err).Msg("Error accepting connection")
+				return
 			}
-		}()
-
-		select {
-		case conn := <-connChan:
-			// Handle the connection in a separate goroutine
 			go s.forwardConnection(conn, remotePort)
-
-		case err := <-errChan:
-			s.Logger.WithError(err).Error("Error accepting connection")
-			return // Exit on accept error
-
-		case <-autoDisconnectTimer.C:
-			// Auto-disconnect after 30 seconds, regardless of connections
-			s.Logger.WithFields(logrus.Fields{
-				"remote_port":  remotePort,
-				"backend_host": backendHost,
-			}).Info("Listener auto-disconnected after 30 seconds")
-			return
 		}
 	}
 }
@@ -222,25 +206,17 @@ func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
 
 	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to connect to local service")
+		s.Logger.Error().Err(err).Msg("Failed to connect to local service")
 		return
 	}
 	defer localConn.Close()
 
-	go func() {
-		if _, err := io.Copy(localConn, conn); err != nil {
-			s.Logger.WithError(err).Error("Error forwarding data from remote to local")
-		}
-	}()
+	go io.Copy(localConn, conn)
+	io.Copy(conn, localConn)
 
-	if _, err := io.Copy(conn, localConn); err != nil {
-		s.Logger.WithError(err).Error("Error forwarding data from local to remote")
-	}
-
-	s.Logger.WithFields(logrus.Fields{
-		"local_port":  remotePort,
-		"remote_port": conn.RemoteAddr().(*net.TCPAddr).Port,
-	}).Info("Finished forwarding connection")
+	s.Logger.Info().
+		Int("local_port", remotePort).
+		Msg("Finished forwarding connection")
 }
 
 // publishDeviceReply sends a DeviceReply message over MQTT
@@ -253,7 +229,7 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 
 	payload, err := json.Marshal(reply)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to marshal DeviceReply message")
+		s.Logger.Error().Err(err).Msg("Failed to marshal DeviceReply message")
 		return
 	}
 
@@ -262,40 +238,8 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 	token.Wait()
 
 	if err := token.Error(); err != nil {
-		s.Logger.WithError(err).Error("Failed to publish DeviceReply message")
+		s.Logger.Error().Err(err).Msg("Failed to publish DeviceReply message")
 	} else {
-		s.Logger.WithFields(logrus.Fields{
-			"deviceID": deviceID,
-			"lport":    localPort,
-			"rport":    remotePort,
-		}).Info("Published DeviceReply message")
-	}
-}
-
-func (s *SSHService) publishDisconnectRequest(deviceID, serverId string, localPort, remotePort int) {
-	request := models.DisconnectRequest{
-		DeviceID: deviceID,
-		Lport:    localPort,
-		Rport:    remotePort,
-	}
-
-	payload, err := json.Marshal(request)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to marshal DisconnectRequest message")
-		return
-	}
-
-	topic := fmt.Sprintf("%s/%s/disconnect", s.SubTopic, serverId)
-	token := s.MqttClient.Publish(topic, byte(s.QOS), false, payload)
-	token.Wait()
-
-	if err := token.Error(); err != nil {
-		s.Logger.WithError(err).Error("Failed to publish DisconnectRequest message")
-	} else {
-		s.Logger.WithFields(logrus.Fields{
-			"deviceID": deviceID,
-			"lport":    localPort,
-			"rport":    remotePort,
-		}).Info("Published DisconnectRequest message")
+		s.Logger.Info().Msg("Published DeviceReply message")
 	}
 }
