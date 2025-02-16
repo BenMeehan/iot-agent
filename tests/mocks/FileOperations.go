@@ -67,6 +67,42 @@ func (_m *FileOperations) ReadFileRaw(filePath string) ([]byte, error) {
 	return r0, r1
 }
 
+// ReadJsonFile provides a mock function with given fields: filePath, v
+func (_m *FileOperations) ReadJsonFile(filePath string, v interface{}) error {
+	ret := _m.Called(filePath, v)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadJsonFile")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, interface{}) error); ok {
+		r0 = rf(filePath, v)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// ReadYamlFile provides a mock function with given fields: filePath, v
+func (_m *FileOperations) ReadYamlFile(filePath string, v interface{}) error {
+	ret := _m.Called(filePath, v)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReadYamlFile")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, interface{}) error); ok {
+		r0 = rf(filePath, v)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
 // WriteFile provides a mock function with given fields: filePath, data
 func (_m *FileOperations) WriteFile(filePath string, data string) error {
 	ret := _m.Called(filePath, data)
@@ -109,6 +145,24 @@ func (_m *FileOperations) WriteJsonFile(filePath string, data interface{}) error
 
 	if len(ret) == 0 {
 		panic("no return value specified for WriteJsonFile")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, interface{}) error); ok {
+		r0 = rf(filePath, data)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// WriteYamlFile provides a mock function with given fields: filePath, data
+func (_m *FileOperations) WriteYamlFile(filePath string, data interface{}) error {
+	ret := _m.Called(filePath, data)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WriteYamlFile")
 	}
 
 	var r0 error

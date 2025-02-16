@@ -93,7 +93,6 @@ func jwtDecodeBase64(input string) (string, error) {
 }
 
 // IsJWTValid checks if the current JWT token is valid.
-// It verifies the token structure, required claims, and expiration.
 func (jm *JWTManager) IsJWTValid() (bool, error) {
 	if jm.Token == "" {
 		return false, nil
@@ -116,21 +115,12 @@ func (jm *JWTManager) IsJWTValid() (bool, error) {
 		return false, errors.New("failed to parse JWT claims: " + err.Error())
 	}
 
-	// Check for required claims (e.g., "exp" for expiration).
+	// Check for expiration claim.
 	exp, ok := claims["exp"].(float64)
 	if !ok {
 		return false, errors.New("JWT expiration (exp) claim missing or invalid")
 	}
 
-	// Check for other custom claims if required (e.g., "iss", "aud").
-	// if iss, ok := claims["iss"].(string); !ok || iss == "" {
-	// 	return false, errors.New("JWT issuer (iss) claim missing or invalid")
-	// }
-	// if aud, ok := claims["aud"].(string); !ok || aud == "" {
-	// 	return false, errors.New("JWT audience (aud) claim missing or invalid")
-	// }
-
-	// Check expiration time.
 	expiryTime := time.Unix(int64(exp), 0)
 	if time.Now().After(expiryTime) {
 		return false, nil

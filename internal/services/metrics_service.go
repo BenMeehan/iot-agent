@@ -32,6 +32,25 @@ type MetricsService struct {
 	running           bool
 }
 
+// NewMetricsService creates and returns a new instance of MetricsService.
+func NewMetricsService(pubTopic, metricsConfigFile string, interval time.Duration,
+	deviceInfo identity.DeviceInfoInterface, qos int, mqttClient mqtt.MQTTClient,
+	fileClient file.FileOperations, logger zerolog.Logger) *MetricsService {
+
+	return &MetricsService{
+		PubTopic:          pubTopic,
+		MetricsConfigFile: metricsConfigFile,
+		Interval:          interval,
+		DeviceInfo:        deviceInfo,
+		QOS:               qos,
+		MqttClient:        mqttClient,
+		FileClient:        fileClient,
+		Logger:            logger,
+		stopChan:          make(chan struct{}),
+		running:           false,
+	}
+}
+
 // Start begins periodic metrics collection and publishing
 func (m *MetricsService) Start() error {
 	if m.running {

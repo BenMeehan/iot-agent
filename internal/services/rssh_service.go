@@ -35,6 +35,29 @@ type SSHService struct {
 	stopChan        chan struct{}
 }
 
+// NewSSHService creates and returns a new instance of SSHService.
+func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
+	logger zerolog.Logger, backendHost string, backendPort int, sshUser string, privateKeyPath string,
+	fileClient file.FileOperations, qos int) *SSHService {
+
+	return &SSHService{
+		SubTopic:        subTopic,
+		DeviceInfo:      deviceInfo,
+		MqttClient:      mqttClient,
+		Logger:          logger,
+		BackendHost:     backendHost,
+		BackendPort:     backendPort,
+		SSHUser:         sshUser,
+		PrivateKeyPath:  privateKeyPath,
+		FileClient:      fileClient,
+		QOS:             qos,
+		listeners:       make(map[int]net.Listener),
+		clientPool:      cmap.New[*ssh.Client](),
+		clientListeners: cmap.New[int](),
+		stopChan:        make(chan struct{}),
+	}
+}
+
 // Start subscribes to MQTT topics and listens for SSH requests
 func (s *SSHService) Start() error {
 	s.Logger.Info().Msg("Starting SSH service...")

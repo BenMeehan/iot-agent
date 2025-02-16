@@ -2,21 +2,26 @@ package file
 
 import (
 	"encoding/json"
+	"io"
 	"os"
+
+	"gopkg.in/yaml.v3"
 )
 
 // FileOperations defines methods for reading from and writing to files.
 type FileOperations interface {
 	ReadFile(filePath string) (string, error)
 	ReadFileRaw(filePath string) ([]byte, error)
+	ReadJsonFile(filePath string, v any) error
+	ReadYamlFile(filePath string, v any) error
 	WriteFile(filePath string, data string) error
 	WriteFileRaw(filePath string, data []byte) error
 	WriteJsonFile(filePath string, data any) error
+	WriteYamlFile(filePath string, data any) error
 }
 
 // FileService implements the FileOperations interface using standard file operations.
-type FileService struct {
-}
+type FileService struct{}
 
 // NewFileService creates a new instance of FileService.
 func NewFileService() *FileService {
@@ -34,28 +39,87 @@ func (fs *FileService) ReadFile(filePath string) (string, error) {
 
 // ReadFileRaw reads the contents of the file at filePath and returns it as a byte array.
 func (fs *FileService) ReadFileRaw(filePath string) ([]byte, error) {
-	data, err := os.ReadFile(filePath)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return data, nil
+	defer file.Close()
+
+	return io.ReadAll(file)
+}
+
+// ReadJsonFile reads and unmarshals JSON data from the given file.
+func (fs *FileService) ReadJsonFile(filePath string, v any) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	return decoder.Decode(v)
+}
+
+// ReadYamlFile reads and unmarshals YAML data from the given file.
+func (fs *FileService) ReadYamlFile(filePath string, v any) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	decoder := yaml.NewDecoder(file)
+	return decoder.Decode(v)
 }
 
 // WriteFile writes the data string to the file at filePath.
 func (fs *FileService) WriteFile(filePath string, data string) error {
-	return os.WriteFile(filePath, []byte(data), 0644)
+	return os.WriteFile(filePath, []byte(data), 0600)
 }
 
-// WriteFile writes the data string to the file at filePath.
+// WriteFileRaw writes the data byte array to the file at filePath.
 func (fs *FileService) WriteFileRaw(filePath string, data []byte) error {
-	return os.WriteFile(filePath, data, 0644)
+	return os.WriteFile(filePath, data, 0600)
 }
 
-// WriteJsonFile writes the json data string to the json file at filePath.
+// WriteJsonFile writes the JSON data to the file at filePath.
 func (fs *FileService) WriteJsonFile(filePath string, data any) error {
-	jsonData, err := json.Marshal(data)
+	tempFile := filePath + ".tmp"
+
+	file, err := os.Create(tempFile)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filePath, jsonData, 0644)
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ") // Optional: Pretty-print
+
+	if err := encoder.Encode(data); err != nil {
+		os.Remove(tempFile) // Clean up partial file
+		return err
+	}
+
+	return os.Rename(tempFile, filePath) // Atomic file update
+}
+
+// WriteYamlFile writes the YAML data to the file at filePath.
+func (fs *FileService) WriteYamlFile(filePath string, data any) error {
+	tempFile := filePath + ".tmp"
+
+	file, err := os.Create(tempFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := yaml.NewEncoder(file)
+	defer encoder.Close() // Ensure the encoder is properly closed
+
+	if err := encoder.Encode(data); err != nil {
+		os.Remove(tempFile) // Clean up partial file
+		return err
+	}
+
+	return os.Rename(tempFile, filePath) // Atomic file update
 }

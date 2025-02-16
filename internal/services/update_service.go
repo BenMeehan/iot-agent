@@ -38,10 +38,34 @@ type UpdateService struct {
 	validTransitions map[constants.UpdateState][]constants.UpdateState
 }
 
+// NewUpdateService creates and returns a new instance of UpdateService.
+func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
+	mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger zerolog.Logger,
+	stateFile string, updateFilePath string) *UpdateService {
+
+	return &UpdateService{
+		SubTopic:       subTopic,
+		DeviceInfo:     deviceInfo,
+		QOS:            qos,
+		MqttClient:     mqttClient,
+		FileClient:     fileClient,
+		Logger:         logger,
+		StateFile:      stateFile,
+		UpdateFilePath: updateFilePath,
+		state:          constants.UpdateStateIdle, // Assuming an initial state
+		validTransitions: map[constants.UpdateState][]constants.UpdateState{
+			constants.UpdateStateIdle:        {constants.UpdateStateDownloading},
+			constants.UpdateStateDownloading: {constants.UpdateStateVerifying, constants.UpdateStateFailure},
+			constants.UpdateStateVerifying:   {constants.UpdateStateInstalling, constants.UpdateStateFailure},
+			constants.UpdateStateInstalling:  {constants.UpdateStateSuccess, constants.UpdateStateFailure},
+			constants.UpdateStateSuccess:     {},
+			constants.UpdateStateFailure:     {constants.UpdateStateIdle},
+		},
+	}
+}
+
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
-	u.InitializeStateMachine()
-
 	// Ensure the state file exists
 	if err := u.EnsureStateFileExists(); err != nil {
 		return err
@@ -82,24 +106,6 @@ func (u *UpdateService) Stop() error {
 
 	u.Logger.Info().Msg("UpdateService stopped successfully")
 	return nil
-}
-
-// InitializeStateMachine initializes valid state transitions
-func (u *UpdateService) InitializeStateMachine() {
-	u.validTransitions = map[constants.UpdateState][]constants.UpdateState{
-		constants.StateEmpty: {constants.StateDownloading},
-
-		// Normal flow from downloading to verifying to installing
-		constants.StateDownloading: {constants.StateVerifying, constants.StateFailure},
-		constants.StateVerifying:   {constants.StateInstalling, constants.StateFailure},
-
-		// After installation, the update can either succeed or fail
-		constants.StateInstalling: {constants.StateSuccess, constants.StateFailure},
-
-		// Terminal states: cannot transition from success or failure
-		constants.StateSuccess: {constants.StateDownloading},
-		constants.StateFailure: {constants.StateDownloading},
-	}
 }
 
 // isValidTransition checks if the transition between states is valid
@@ -162,14 +168,14 @@ func (u *UpdateService) ResumeFromState() error {
 	stateData, err := u.FileClient.ReadFile(u.StateFile)
 	if err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to read state file, starting fresh")
-		u.state = constants.StateDownloading // Default initial state
+		u.state = constants.UpdateStateDownloading // Default initial state
 		return nil
 	}
 
 	var stateStruct struct{ State constants.UpdateState }
 	if err := json.Unmarshal([]byte(stateData), &stateStruct); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to parse state file, starting fresh")
-		u.state = constants.StateDownloading
+		u.state = constants.UpdateStateDownloading
 		return nil
 	}
 
@@ -178,14 +184,14 @@ func (u *UpdateService) ResumeFromState() error {
 
 	// Continue the process based on the current state
 	switch u.state {
-	case constants.StateDownloading:
+	case constants.UpdateStateDownloading:
 		// Re-download the update
 		u.handleUpdateCommand(nil, nil)
 		return nil
-	case constants.StateVerifying:
+	case constants.UpdateStateVerifying:
 		// Re-verify and decrypt the update
 		return u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"))
-	case constants.StateInstalling:
+	case constants.UpdateStateInstalling:
 		// Re-apply the update
 		instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
 		extractedDir := u.UpdateFilePath
@@ -203,7 +209,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		u.setState(constants.StateFailure)
+		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to parse update command payload")
 		return
 	}
@@ -216,7 +222,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Check if the version is newer
 	isNew, err := u.isNewVersion(payload.Version)
 	if err != nil {
-		u.setState(constants.StateFailure)
+		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to check version")
 		return
 	}
@@ -229,22 +235,22 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	// Proceed with the update process
-	if err := u.setState(constants.StateDownloading); err != nil {
+	if err := u.setState(constants.UpdateStateDownloading); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to set state to downloading")
 	}
 
 	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
-		u.setState(constants.StateFailure)
+		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to download update file")
 		return
 	}
 
-	if err := u.setState(constants.StateVerifying); err != nil {
+	if err := u.setState(constants.UpdateStateVerifying); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to set state to verifying")
 	}
 
 	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
-		u.setState(constants.StateFailure)
+		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to verify update")
 		return
 	}
@@ -252,12 +258,12 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
 	extractedDir := u.UpdateFilePath
 
-	if err := u.setState(constants.StateInstalling); err != nil {
+	if err := u.setState(constants.UpdateStateInstalling); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to set state to installing")
 	}
 
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
-		u.setState(constants.StateFailure)
+		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to apply update, starting rollback")
 
 		// Rollback on failure
@@ -265,7 +271,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		return
 	}
 
-	if err := u.setState(constants.StateSuccess); err != nil {
+	if err := u.setState(constants.UpdateStateSuccess); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to set state to success")
 	}
 

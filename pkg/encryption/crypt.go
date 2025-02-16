@@ -6,50 +6,70 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+
+	"github.com/benmeehan/iot-agent/pkg/file"
 )
 
-// EncryptionManager defines the interface for encryption and decryption operations.
+// EncryptionManagerInterface defines encryption and decryption methods.
 type EncryptionManagerInterface interface {
 	Encrypt(plaintext []byte) ([]byte, error)
 	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
-// EncryptionManager implements the EncryptionManagerInterface using AES-GCM.
+// EncryptionManager implements AES-GCM encryption.
 type EncryptionManager struct {
-	key []byte
+	key        []byte
+	fileClient file.FileOperations
+	aesgcm     cipher.AEAD
 }
 
-// NewEncryptionManager creates a new AESGCM instance with the provided key.
-func NewEncryptionManager(key []byte) (*EncryptionManager, error) {
-	const keySize = 32 // AES-256
-	if len(key) != keySize {
-		return nil, fmt.Errorf("invalid AES key size: got %d bytes, want %d bytes", len(key), keySize)
+// NewEncryptionManager creates a new EncryptionManager instance.
+func NewEncryptionManager(fileClient file.FileOperations) *EncryptionManager {
+	return &EncryptionManager{fileClient: fileClient}
+}
+
+// Initialize loads and caches the AES key and cipher.
+func (a *EncryptionManager) Initialize(AESKeyPath string) error {
+	key, err := a.fileClient.ReadFileRaw(AESKeyPath)
+	if err != nil || len(key) == 0 {
+		return fmt.Errorf("failed to read or validate AES key: %w", err)
 	}
-	return &EncryptionManager{key: key}, nil
-}
+	const keySize = 32
+	if len(key) != keySize {
+		return fmt.Errorf("invalid AES key size: got %d bytes, want %d bytes", len(key), keySize)
+	}
+	a.key = key
 
-// Encrypt encrypts the plaintext using AES-GCM and returns the ciphertext, including the nonce.
-func (a *EncryptionManager) Encrypt(plaintext []byte) ([]byte, error) {
+	// Cache AES-GCM object
 	block, err := aes.NewCipher(a.key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
+		return fmt.Errorf("failed to create AES cipher block: %w", err)
 	}
 
-	nonce := make([]byte, 12)
-	if _, err := rand.Read(nonce); err != nil {
+	a.aesgcm, err = cipher.NewGCM(block)
+	if err != nil {
+		return fmt.Errorf("failed to create AES-GCM: %w", err)
+	}
+
+	return nil
+}
+
+// Encrypt encrypts plaintext using AES-GCM.
+func (a *EncryptionManager) Encrypt(plaintext []byte) ([]byte, error) {
+	if a.aesgcm == nil {
+		return nil, errors.New("encryption manager not initialized")
+	}
+
+	var nonce [12]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES-GCM: %w", err)
-	}
-
-	ciphertext := aesgcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := a.aesgcm.Seal(nonce[:], nonce[:], plaintext, nil)
 	return ciphertext, nil
 }
 
-// Decrypt decrypts the ciphertext using AES-GCM.
+// Decrypt decrypts ciphertext using AES-GCM.
 func (a *EncryptionManager) Decrypt(ciphertext []byte) ([]byte, error) {
 	const nonceSize = 12
 	if len(ciphertext) < nonceSize {
@@ -59,17 +79,11 @@ func (a *EncryptionManager) Decrypt(ciphertext []byte) ([]byte, error) {
 	nonce := ciphertext[:nonceSize]
 	encryptedData := ciphertext[nonceSize:]
 
-	block, err := aes.NewCipher(a.key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
+	if a.aesgcm == nil {
+		return nil, errors.New("encryption manager not initialized")
 	}
 
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES-GCM: %w", err)
-	}
-
-	plaintext, err := aesgcm.Open(nil, nonce, encryptedData, nil)
+	plaintext, err := a.aesgcm.Open(nil, nonce, encryptedData, nil)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}

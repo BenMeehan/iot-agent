@@ -1,9 +1,7 @@
 package utils
 
 import (
-	"os"
-
-	"gopkg.in/yaml.v2"
+	"github.com/benmeehan/iot-agent/pkg/file"
 )
 
 // Config represents the structure of the configuration file.
@@ -87,17 +85,10 @@ type Config struct {
 
 // LoadConfig loads the YAML configuration from the specified file.
 // It returns a pointer to the Config struct and an error if loading fails.
-func LoadConfig(filename string) (*Config, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	// Decode the YAML file into the Config struct
+func LoadConfig(filename string, fileClient file.FileOperations) (*Config, error) {
+	// Use the ReadYamlFile method from fileClient
 	var config Config
-	decoder := yaml.NewDecoder(file)
-	err = decoder.Decode(&config)
+	err := fileClient.ReadYamlFile(filename, &config)
 	if err != nil {
 		return nil, err
 	}

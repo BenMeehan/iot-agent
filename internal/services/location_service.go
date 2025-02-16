@@ -25,6 +25,23 @@ type LocationService struct {
 	running          bool
 }
 
+// NewLocationService creates and returns a new instance of LocationService.
+func NewLocationService(pubTopic string, interval time.Duration, deviceInfo identity.DeviceInfoInterface,
+	qos int, mqttClient mqtt.MQTTClient, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
+
+	return &LocationService{
+		PubTopic:         pubTopic,
+		Interval:         interval,
+		DeviceInfo:       deviceInfo,
+		QOS:              qos,
+		MqttClient:       mqttClient,
+		Logger:           logger,
+		LocationProvider: locationProvider,
+		stopChan:         make(chan struct{}),
+		running:          false,
+	}
+}
+
 // Start initiates the location service and continuously publishes location messages to the MQTT broker.
 func (l *LocationService) Start() error {
 	if l.running {

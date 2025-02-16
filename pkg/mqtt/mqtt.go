@@ -1,11 +1,11 @@
 package mqtt
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"os"
+	"fmt"
 
+	"github.com/benmeehan/iot-agent/pkg/file"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -20,30 +20,36 @@ type MQTTClient interface {
 
 // MqttService provides methods for MQTT operations.
 type MqttService struct {
-	client MQTTClient
+	client     MQTTClient
+	fileClient file.FileOperations
 }
 
 // NewMqttService creates a new MqttService instance.
-func NewMqttService() *MqttService {
-	return &MqttService{}
+func NewMqttService(fileClient file.FileOperations) *MqttService {
+	return &MqttService{
+		fileClient: fileClient,
+	}
 }
 
 // Initialize sets up the MQTT client with SSL/TLS and starts the connection.
-func (s *MqttService) Initialize(context context.Context, broker, clientID, caCertPath string) error {
-	caCert, err := os.ReadFile(caCertPath)
+func (s *MqttService) Initialize(broker, clientID, caCertPath string) error {
+	caCert, err := s.fileClient.ReadFileRaw(caCertPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read CA certificate: %v", err)
 	}
 
 	// Create a CA certificate pool and append the CA certificate to it
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
-
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return fmt.Errorf("failed to append CA certificate")
+	}
 	// Create a TLS configuration with the CA certificate
 	tlsConfig := &tls.Config{
 		RootCAs:            caCertPool,
 		InsecureSkipVerify: true, // Disable certificate validation for testing (not recommended for production)
 	}
+
+	// TODO: Add username and password authentication
 
 	// Set up the MQTT client options
 	opts := mqtt.NewClientOptions()

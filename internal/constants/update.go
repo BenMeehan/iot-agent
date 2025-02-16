@@ -3,10 +3,10 @@ package constants
 type UpdateState string
 
 const (
-	StateEmpty       UpdateState = ""
-	StateDownloading UpdateState = "downloading"
-	StateVerifying   UpdateState = "verifying"
-	StateInstalling  UpdateState = "installing"
-	StateSuccess     UpdateState = "success"
-	StateFailure     UpdateState = "failure"
+	UpdateStateIdle        UpdateState = ""
+	UpdateStateDownloading UpdateState = "downloading"
+	UpdateStateVerifying   UpdateState = "verifying"
+	UpdateStateInstalling  UpdateState = "installing"
+	UpdateStateSuccess     UpdateState = "success"
+	UpdateStateFailure     UpdateState = "failure"
 )
