@@ -3,10 +3,13 @@ module github.com/benmeehan/iot-agent
 go 1.22
 
 require (
+	github.com/Masterminds/semver/v3 v3.3.1
 	github.com/adrianmo/go-nmea v1.10.0
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/elliotchance/orderedmap/v2 v2.4.0
 	github.com/google/uuid v1.6.0
+	github.com/orcaman/concurrent-map/v2 v2.0.1
+	github.com/rs/zerolog v1.33.0
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.8.4
@@ -17,11 +20,11 @@ require (
 )
 
 require (
-	github.com/Masterminds/semver/v3 v3.3.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.14 // indirect

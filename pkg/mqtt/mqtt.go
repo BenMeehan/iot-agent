@@ -1,12 +1,12 @@
 package mqtt
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"os"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/sirupsen/logrus"
 )
 
 // MQTTClient defines the interface for an MQTT client.
@@ -14,28 +14,24 @@ type MQTTClient interface {
 	Connect() mqtt.Token
 	Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token
 	Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token
+	Unsubscribe(topics ...string) mqtt.Token
 	Disconnect(quiesce uint)
 }
 
 // MqttService provides methods for MQTT operations.
 type MqttService struct {
 	client MQTTClient
-	Logger *logrus.Logger
 }
 
-// NewMqttService creates a new MqttService instance with the provided client.
-func NewMqttService(logger *logrus.Logger) *MqttService {
-	return &MqttService{
-		Logger: logger,
-	}
+// NewMqttService creates a new MqttService instance.
+func NewMqttService() *MqttService {
+	return &MqttService{}
 }
 
 // Initialize sets up the MQTT client with SSL/TLS and starts the connection.
-// This method now acts on an existing MqttService instance.
-func (s *MqttService) Initialize(broker, clientID, caCertPath string) error {
+func (s *MqttService) Initialize(context context.Context, broker, clientID, caCertPath string) error {
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to read CA certificate")
 		return err
 	}
 
@@ -56,16 +52,6 @@ func (s *MqttService) Initialize(broker, clientID, caCertPath string) error {
 	opts.SetTLSConfig(tlsConfig)
 	opts.SetAutoReconnect(true)
 
-	// Handler for successful MQTT connection
-	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		s.Logger.Info("MQTT client connected successfully")
-	})
-
-	// Handler for MQTT connection loss
-	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
-		s.Logger.WithError(err).Error("MQTT connection lost")
-	})
-
 	// Create and assign the MQTT client to the service
 	client := mqtt.NewClient(opts)
 	s.client = client
@@ -73,11 +59,9 @@ func (s *MqttService) Initialize(broker, clientID, caCertPath string) error {
 	// Connect to the MQTT broker using the Connect method
 	token := s.Connect()
 	if token.Wait() && token.Error() != nil {
-		s.Logger.WithError(token.Error()).Error("Failed to connect to MQTT broker")
 		return token.Error()
 	}
 
-	s.Logger.Info("MQTT client initialized and connected")
 	return nil
 }
 
@@ -88,14 +72,17 @@ func (s *MqttService) Connect() mqtt.Token {
 
 // Publish sends a message to the specified topic.
 func (s *MqttService) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
-	token := s.client.Publish(topic, qos, retained, payload)
-	return token
+	return s.client.Publish(topic, qos, retained, payload)
 }
 
 // Subscribe subscribes to the specified topic with a message handler.
 func (s *MqttService) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
-	token := s.client.Subscribe(topic, qos, callback)
-	return token
+	return s.client.Subscribe(topic, qos, callback)
+}
+
+// Unsubscribe unsubscribes from the specified topics.
+func (s *MqttService) Unsubscribe(topics ...string) mqtt.Token {
+	return s.client.Unsubscribe(topics...)
 }
 
 // Disconnect gracefully disconnects the MQTT client.

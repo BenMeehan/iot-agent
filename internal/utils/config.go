@@ -3,7 +3,6 @@ package utils
 import (
 	"os"
 
-	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v2"
 )
 
@@ -88,12 +87,9 @@ type Config struct {
 
 // LoadConfig loads the YAML configuration from the specified file.
 // It returns a pointer to the Config struct and an error if loading fails.
-func LoadConfig(filename string, logger *logrus.Logger) (*Config, error) {
-	logger.Infof("Loading configuration from file: %s", filename)
-
+func LoadConfig(filename string) (*Config, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		logger.Errorf("Failed to open config file: %v", err)
 		return nil, err
 	}
 	defer file.Close()
@@ -103,10 +99,8 @@ func LoadConfig(filename string, logger *logrus.Logger) (*Config, error) {
 	decoder := yaml.NewDecoder(file)
 	err = decoder.Decode(&config)
 	if err != nil {
-		logger.Errorf("Failed to decode config file: %v", err)
 		return nil, err
 	}
 
-	logger.Infof("Configuration loaded successfully from %s", filename)
 	return &config, nil
 }

@@ -1,12 +1,13 @@
 package services_test
 
 import (
+	"os"
 	"testing"
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/tests/mocks"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -17,7 +18,7 @@ func TestHeartbeatService_Start(t *testing.T) {
 	mockJWTManager := new(mocks.JWTManagerInterface)
 	mockMqttClient := new(mocks.MQTTClient)
 	mockMqttToken := new(mocks.MockToken)
-	logger := logrus.New()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
 	// Mock expectations
 	mockDeviceInfo.On("GetDeviceID").Return("device123")

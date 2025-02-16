@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/benmeehan/iot-agent/pkg/file"
-	"github.com/sirupsen/logrus"
 )
 
 // Identity holds the device's unique identifier and other metadata.
@@ -29,16 +28,14 @@ type DeviceInfo struct {
 	DeviceInfoFile string              // Path to the device info file
 	Identity       Identity            // Current device identity
 	fileOps        file.FileOperations // Interface for file operations
-	Logger         *logrus.Logger      // Logger for logging messages
 }
 
 // NewDeviceInfo initializes a new DeviceInfo instance with the specified file path and file operations.
 // Returns a pointer to a DeviceInfo instance with the file path and file operations set.
-func NewDeviceInfo(filePath string, fileOps file.FileOperations, logger *logrus.Logger) DeviceInfoInterface {
+func NewDeviceInfo(filePath string, fileOps file.FileOperations) DeviceInfoInterface {
 	return &DeviceInfo{
 		DeviceInfoFile: filePath,
 		fileOps:        fileOps,
-		Logger:         logger,
 		Identity:       Identity{},
 	}
 }
@@ -51,30 +48,23 @@ func (d *DeviceInfo) LoadDeviceInfo() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// File does not exist, initialize with default empty values
-			d.Logger.Warnf("Device info file does not exist: %s, initializing with default values", d.DeviceInfoFile)
 			d.Identity = Identity{}
 			return nil
 		}
-		// Log and return other read errors
-		d.Logger.WithError(err).Error("Failed to read device info file")
 		return err
 	}
 
 	// Check if the file content is empty
 	if len(data) == 0 {
-		d.Logger.Warnf("Device info file is empty: %s, initializing with default values", d.DeviceInfoFile)
 		d.Identity = Identity{}
 		return nil
 	}
 
 	// Attempt to unmarshal the JSON content into the Identity field
 	if err := json.Unmarshal([]byte(data), &d.Identity); err != nil {
-		// Log and return unmarshalling errors
-		d.Logger.WithError(err).Error("Failed to parse device info from file")
 		return err
 	}
 
-	d.Logger.Info("Device info successfully loaded")
 	return nil
 }
 
@@ -83,7 +73,7 @@ func (d *DeviceInfo) GetDeviceIdentity() *Identity {
 	return &d.Identity
 }
 
-// GetDeviceIdentity returns the current device Identity.
+// GetDeviceID returns the current device ID.
 func (d *DeviceInfo) GetDeviceID() string {
 	return d.Identity.ID
 }
@@ -92,24 +82,18 @@ func (d *DeviceInfo) GetDeviceID() string {
 // Returns an error if marshalling the Identity or writing the file fails.
 func (d *DeviceInfo) SaveDeviceID(deviceID string) error {
 	// Update the device ID in the Identity field.
-	d.Logger.Infof("Saving device ID: %s", deviceID)
 	d.Identity.ID = deviceID
 
 	// Marshal the Identity to JSON format
 	data, err := json.Marshal(d.Identity)
 	if err != nil {
-		// Log and return serialization errors
-		d.Logger.WithError(err).Error("Failed to serialize device info")
 		return err
 	}
 
 	// Write the serialized JSON to the file
 	if err := d.fileOps.WriteFile(d.DeviceInfoFile, string(data)); err != nil {
-		// Log and return file write errors
-		d.Logger.WithError(err).Error("Failed to write device info to file")
 		return err
 	}
 
-	d.Logger.Info("Device ID successfully saved")
 	return nil
 }

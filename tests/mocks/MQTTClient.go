@@ -77,6 +77,32 @@ func (_m *MQTTClient) Subscribe(topic string, qos byte, callback mqtt.MessageHan
 	return r0
 }
 
+// Unsubscribe provides a mock function with given fields: topics
+func (_m *MQTTClient) Unsubscribe(topics ...string) mqtt.Token {
+	_va := make([]interface{}, len(topics))
+	for _i := range topics {
+		_va[_i] = topics[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Unsubscribe")
+	}
+
+	var r0 mqtt.Token
+	if rf, ok := ret.Get(0).(func(...string) mqtt.Token); ok {
+		r0 = rf(topics...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(mqtt.Token)
+		}
+	}
+
+	return r0
+}
+
 // NewMQTTClient creates a new instance of MQTTClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMQTTClient(t interface {

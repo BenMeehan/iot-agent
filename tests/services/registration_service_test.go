@@ -2,13 +2,14 @@ package services_test
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/tests/mocks"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -19,7 +20,7 @@ func TestRegistrationService_Start_Success(t *testing.T) {
 	mockJWTManager := new(mocks.JWTManagerInterface)
 	mockEncryption := new(mocks.EncryptionManagerInterface)
 	mockMqttClient := new(mocks.MQTTClient)
-	logger := logrus.New()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
 	mockDeviceInfo.On("GetDeviceID").Return("existing-device-id")
 	mockJWTManager.On("IsJWTValid").Return(true, nil)
@@ -49,7 +50,7 @@ func TestRegistrationService_Start_InvalidJWT(t *testing.T) {
 	mockJWTManager := new(mocks.JWTManagerInterface)
 	mockEncryption := new(mocks.EncryptionManagerInterface)
 	mockMqttClient := new(mocks.MQTTClient)
-	logger := logrus.New()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
 	mockDeviceInfo.On("GetDeviceID").Return("existing-device-id")
 	mockJWTManager.On("IsJWTValid").Return(false, errors.New("invalid JWT"))
@@ -80,7 +81,7 @@ func TestRegistrationService_Register_Success(t *testing.T) {
 	mockEncryption := new(mocks.EncryptionManagerInterface)
 	mockMqttClient := new(mocks.MQTTClient)
 	mockMqttToken := new(mocks.MockToken)
-	logger := logrus.New()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
 	payload := models.RegistrationPayload{
 		ClientID: "test-client",
@@ -138,7 +139,7 @@ func TestRegistrationService_Register_Success(t *testing.T) {
 func TestRegistrationService_Register_FailEncrypt(t *testing.T) {
 	mockEncryption := new(mocks.EncryptionManagerInterface)
 	mockMqttClient := new(mocks.MQTTClient)
-	logger := logrus.New()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
 	payload := models.RegistrationPayload{ClientID: "test-client"}
 	mockEncryption.On("Encrypt", mock.Anything).Return(nil, errors.New("encryption error"))

@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
@@ -9,9 +10,10 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 )
 
+// HeartbeatService handles sending periodic heartbeat messages.
 type HeartbeatService struct {
 	PubTopic   string
 	Interval   time.Duration
@@ -19,13 +21,20 @@ type HeartbeatService struct {
 	QOS        int
 	MqttClient mqtt.MQTTClient
 	JWTManager jwt.JWTManagerInterface
-	Logger     *logrus.Logger
+	Logger     zerolog.Logger
 	stopChan   chan struct{}
+	running    bool
 }
 
-// Start initiates the heartbeat service and continuously publishes heartbeat messages to the MQTT broker
+// Start begins publishing heartbeat messages at regular intervals.
 func (h *HeartbeatService) Start() error {
+	if h.running {
+		h.Logger.Warn().Msg("HeartbeatService is already running")
+		return errors.New("heartbeat service is already running")
+	}
+
 	h.stopChan = make(chan struct{}) // Channel to signal the goroutine to stop
+	h.running = true
 
 	go func() {
 		ticker := time.NewTicker(h.Interval)
@@ -43,7 +52,7 @@ func (h *HeartbeatService) Start() error {
 
 				payload, err := json.Marshal(heartbeatMessage)
 				if err != nil {
-					h.Logger.WithError(err).Error("failed to serialize heartbeat message")
+					h.Logger.Error().Err(err).Msg("Failed to serialize heartbeat message")
 					continue
 				}
 
@@ -52,25 +61,36 @@ func (h *HeartbeatService) Start() error {
 				token.Wait()
 
 				if err := token.Error(); err != nil {
-					h.Logger.WithError(err).Error("failed to publish heartbeat message")
-					continue
+					h.Logger.Error().Err(err).Msg("Failed to publish heartbeat message")
 				} else {
-					h.Logger.WithField("message", heartbeatMessage).Info("Heartbeat published successfully")
+					h.Logger.Info().Msg("Heartbeat published successfully")
 				}
 
 			case <-h.stopChan:
-				// Stop the goroutine
+				h.running = false
 				return
 			}
 		}
 	}()
 
+	h.Logger.Info().Str("topic", h.PubTopic).Msg("HeartbeatService started")
 	return nil
 }
 
-// Stop gracefully stops the heartbeat service
-func (h *HeartbeatService) Stop() {
-	if h.stopChan != nil {
-		close(h.stopChan)
+// Stop gracefully stops the heartbeat service.
+func (h *HeartbeatService) Stop() error {
+	if !h.running {
+		h.Logger.Warn().Msg("HeartbeatService is not running")
+		return errors.New("heartbeat service is not running")
 	}
+
+	if h.stopChan == nil {
+		h.Logger.Error().Msg("Failed to stop HeartbeatService: stop channel is nil")
+		return errors.New("stop channel is nil")
+	}
+
+	close(h.stopChan)
+	h.running = false
+	h.Logger.Info().Msg("HeartbeatService stopped")
+	return nil
 }

@@ -15,7 +15,7 @@ type HeartbeatService struct {
     QOS        int
     MqttClient mqtt.MQTTClient
     JWTManager jwt.JWTManagerInterface
-    Logger     *logrus.Logger
+    Logger     zerolog.Logger
     stopChan   chan struct{}
 }
 ```
@@ -43,7 +43,7 @@ type HeartbeatService struct {
 6. **`JWTManager` (jwt.JWTManagerInterface):**
    - An interface that handles generating or retrieving JWT tokens for the device. The JWT is included in the heartbeat message for authentication purposes.
 
-7. **`Logger` (*logrus.Logger):**
+7. **`Logger` (zerolog.Logger):**
    - A logger used to log errors and status messages during the operation of the heartbeat service.
 
 8. **`stopChan` (chan struct{}):**
