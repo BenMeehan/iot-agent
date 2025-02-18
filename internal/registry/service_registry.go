@@ -127,6 +127,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				config.Services.Metrics.Topic,
 				config.Services.Metrics.MetricsConfigFile,
 				time.Duration(config.Services.Metrics.Interval)*time.Second,
+				time.Duration(config.Services.Metrics.Timeout)*time.Second,
 				deviceInfo,
 				config.Services.Metrics.QOS,
 				sr.mqttClient,

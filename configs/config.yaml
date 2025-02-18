@@ -25,6 +25,7 @@ services:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
     interval: 10
+    timeout: 5
     qos: 1
     enabled: false
   command_service:
