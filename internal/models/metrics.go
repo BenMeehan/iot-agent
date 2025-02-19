@@ -4,14 +4,17 @@ import "time"
 
 // SystemMetrics represents the system metrics collected at a specific time.
 type SystemMetrics struct {
-	Timestamp  time.Time                  `json:"timestamp"`             // The timestamp when the metrics were collected
-	DeviceID   string                     `json:"device_id"`             // Unique identifier for the device
-	CPUUsage   *float64                   `json:"cpu_usage,omitempty"`   // The CPU usage as a percentage (optional)
-	Memory     *float64                   `json:"memory,omitempty"`      // The memory usage in bytes (optional)
-	Disk       *float64                   `json:"disk,omitempty"`        // Disk usage in bytes (optional)
-	NetworkIn  *float64                   `json:"network_in,omitempty"`  // Network inbound traffic in bytes (optional)
-	NetworkOut *float64                   `json:"network_out,omitempty"` // Network outbound traffic in bytes (optional)
-	Processes  map[string]*ProcessMetrics `json:"processes,omitempty"`   // Map of process names to their metrics (optional)
+	Timestamp time.Time                  `json:"timestamp"`           // The timestamp when the metrics were collected
+	DeviceID  string                     `json:"device_id"`           // Unique identifier for the device
+	Metrics   map[string]Metric          `json:"metrics"`             // Map of metric names to their values
+	Processes map[string]*ProcessMetrics `json:"processes,omitempty"` // Map of process names to their metrics (optional)
+}
+
+// Metric represents a single metric with its value and metadata.
+type Metric struct {
+	Value       interface{} `json:"value"`                 // The value of the metric (can be any type)
+	Unit        string      `json:"unit,omitempty"`        // The unit of the metric (e.g., "percentage", "bytes")
+	Description string      `json:"description,omitempty"` // A brief description of the metric
 }
 
 // ProcessMetrics contains metrics for an individual process running on the system.

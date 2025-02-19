@@ -1,4 +1,4 @@
-package registry
+package service_registry
 
 import (
 	"errors"

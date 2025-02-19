@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/benmeehan/iot-agent/internal/registry"
+	"github.com/benmeehan/iot-agent/internal/service_registry"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/file"
@@ -101,7 +101,7 @@ func main() {
 	log.Info().Msg("JWT manager initialized successfully")
 
 	// Create and register services
-	serviceRegistry := registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger)
+	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger)
 	if err := serviceRegistry.RegisterServices(config, deviceInfo); err != nil {
 		log.Fatal().Err(err).Msg("Failed to register services")
 	}

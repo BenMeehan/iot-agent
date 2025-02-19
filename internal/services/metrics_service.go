@@ -5,18 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/metrics_collectors"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/disk"
-	"github.com/shirou/gopsutil/mem"
-	"github.com/shirou/gopsutil/net"
-	"github.com/shirou/gopsutil/process"
 )
 
 // MetricsService manages device telemetry
@@ -32,6 +29,8 @@ type MetricsService struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	Timeout           time.Duration
+	wg                sync.WaitGroup
+	registry          *metrics_collectors.MetricsRegistry
 }
 
 // NewMetricsService creates and returns a new instance of MetricsService.
@@ -39,7 +38,7 @@ func NewMetricsService(pubTopic, metricsConfigFile string, interval, timeout tim
 	deviceInfo identity.DeviceInfoInterface, qos int, mqttClient mqtt.MQTTClient,
 	fileClient file.FileOperations, logger zerolog.Logger) *MetricsService {
 
-	return &MetricsService{
+	service := &MetricsService{
 		PubTopic:          pubTopic,
 		MetricsConfigFile: metricsConfigFile,
 		Interval:          interval,
@@ -49,7 +48,16 @@ func NewMetricsService(pubTopic, metricsConfigFile string, interval, timeout tim
 		MqttClient:        mqttClient,
 		FileClient:        fileClient,
 		Logger:            logger,
+		registry:          metrics_collectors.NewMetricsRegistry(),
 	}
+
+	service.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: logger})
+	service.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: logger})
+	service.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: logger})
+	service.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: logger})
+	service.registry.Register(&metrics_collectors.ProcessMetricCollector{Logger: logger})
+
+	return service
 }
 
 // Start begins periodic metrics collection and publishing
@@ -59,17 +67,24 @@ func (m *MetricsService) Start() error {
 		return errors.New("metrics service is already running")
 	}
 
-	// Load metrics configuration
 	config, err := m.LoadMetricsConfig()
 	if err != nil {
 		m.Logger.Error().Err(err).Msg("Error loading metrics config")
 		return err
 	}
 
-	// Create a context with cancel for graceful stop
+	if err := m.validateMetricsConfig(config); err != nil {
+		m.Logger.Error().Err(err).Msg("Invalid metrics configuration")
+		return fmt.Errorf("invalid metrics configuration: %w", err)
+	}
+
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
-	go m.collectAndPublishMetrics(config)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.collectAndPublishMetrics(config)
+	}()
 
 	m.Logger.Info().Str("topic", m.PubTopic).Msg("MetricsService started")
 	return nil
@@ -82,13 +97,22 @@ func (m *MetricsService) Stop() error {
 		return errors.New("metrics service is not running")
 	}
 
-	// Cancel the context to stop the service
 	m.cancel()
+	m.wg.Wait()
 	m.Logger.Info().Msg("MetricsService stopped")
 	return nil
 }
 
-// collectAndPublishMetrics runs the collection and publishing loop
+func (m *MetricsService) validateMetricsConfig(config *models.MetricsConfig) error {
+	if !config.MonitorCPU && !config.MonitorMemory && !config.MonitorDisk && !config.MonitorNetwork && len(config.ProcessNames) == 0 {
+		return errors.New("no metrics enabled in configuration")
+	}
+	if len(config.ProcessNames) > 0 && !config.MonitorProcCPU && !config.MonitorProcMem && !config.MonitorIOps {
+		return errors.New("process names specified but no process metrics enabled")
+	}
+	return nil
+}
+
 func (m *MetricsService) collectAndPublishMetrics(config *models.MetricsConfig) {
 	ticker := time.NewTicker(m.Interval)
 	defer ticker.Stop()
@@ -108,7 +132,6 @@ func (m *MetricsService) collectAndPublishMetrics(config *models.MetricsConfig) 
 	}
 }
 
-// LoadMetricsConfig loads and parses the configuration for metrics
 func (m *MetricsService) LoadMetricsConfig() (*models.MetricsConfig, error) {
 	data, err := m.FileClient.ReadFileRaw(m.MetricsConfigFile)
 	if err != nil {
@@ -130,29 +153,29 @@ func (m *MetricsService) LoadMetricsConfig() (*models.MetricsConfig, error) {
 func (m *MetricsService) CollectMetrics(config *models.MetricsConfig) *models.SystemMetrics {
 	metrics := &models.SystemMetrics{
 		Timestamp: time.Now().UTC(),
+		Metrics:   make(map[string]models.Metric),
 		Processes: make(map[string]*models.ProcessMetrics),
 	}
 
-	// Use context with timeout for each individual metric collection
 	metricsCollectionCtx, cancel := context.WithTimeout(m.ctx, m.Timeout)
 	defer cancel()
 
-	if config.MonitorCPU {
-		metrics.CPUUsage = m.getCPUUsage(metricsCollectionCtx)
-	}
-	if config.MonitorMemory {
-		metrics.Memory = m.getMemoryStats(metricsCollectionCtx)
-	}
-	if config.MonitorDisk {
-		metrics.Disk = m.getDiskUsage(metricsCollectionCtx)
-	}
-	if config.MonitorNetwork {
-		metrics.NetworkIn, metrics.NetworkOut = m.getNetworkStats(metricsCollectionCtx)
-	}
+	for name, collector := range m.registry.GetCollectors() {
+		if collector.IsEnabled(config) {
+			collectedValue := collector.Collect(metricsCollectionCtx)
+			metrics.Metrics[name] = models.Metric{
+				Value: collectedValue,
+				Unit:  collector.Unit(),
+			}
 
-	// Collect process metrics if needed
-	if len(config.ProcessNames) > 0 {
-		m.getProcessMetrics(config, metrics, metricsCollectionCtx)
+			if name == "Process" {
+				if processMetrics, ok := collectedValue.(map[string]*models.ProcessMetrics); ok {
+					for procName, procMetric := range processMetrics {
+						metrics.Processes[procName] = procMetric
+					}
+				}
+			}
+		}
 	}
 
 	m.Logger.Debug().Interface("metrics", metrics).Msg("Metrics collected successfully")
@@ -167,194 +190,17 @@ func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
 		return fmt.Errorf("failed to marshal metrics: %w", err)
 	}
 
-	token := m.MqttClient.Publish(m.PubTopic, byte(m.QOS), false, metricsData)
-	if token.Wait() && token.Error() != nil {
-		m.Logger.Error().Err(token.Error()).Msg("Failed to publish metrics via MQTT")
-		return fmt.Errorf("failed to publish metrics: %w", token.Error())
+	retries := 3
+	for i := 0; i < retries; i++ {
+		token := m.MqttClient.Publish(m.PubTopic, byte(m.QOS), false, metricsData)
+		if token.Wait() && token.Error() == nil {
+			m.Logger.Debug().Msg("Metrics published successfully")
+			return nil
+		}
+		m.Logger.Warn().Err(token.Error()).Int("retry", i+1).Msg("Failed to publish metrics, retrying...")
+		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 
-	m.Logger.Debug().Msg("Metrics published successfully")
-	return nil
-}
-
-// Helper functions to gather individual metrics
-
-// getCPUUsage collects CPU usage information
-func (m *MetricsService) getCPUUsage(ctx context.Context) *float64 {
-	cpuPercentagesCh := make(chan []float64, 1)
-	go func() {
-		cpuPercentages, err := cpu.Percent(0, false)
-		if err != nil {
-			m.Logger.Error().Err(err).Msg("Failed to get CPU usage")
-			cpuPercentagesCh <- nil
-			return
-		}
-		cpuPercentagesCh <- cpuPercentages
-	}()
-	select {
-	case cpuPercentages := <-cpuPercentagesCh:
-		if len(cpuPercentages) > 0 {
-			return &cpuPercentages[0]
-		}
-		return nil
-	case <-ctx.Done():
-		m.Logger.Warn().Msg("Timeout reached while collecting CPU usage")
-		return nil
-	}
-}
-
-// getMemoryStats collects memory usage statistics
-func (m *MetricsService) getMemoryStats(ctx context.Context) *float64 {
-	memStatsCh := make(chan *mem.VirtualMemoryStat, 1)
-	go func() {
-		memStats, err := mem.VirtualMemory()
-		if err != nil {
-			m.Logger.Error().Err(err).Msg("Failed to get memory stats")
-			memStatsCh <- nil
-			return
-		}
-		memStatsCh <- memStats
-	}()
-	select {
-	case memStats := <-memStatsCh:
-		if memStats != nil {
-			return &memStats.UsedPercent
-		}
-		return nil
-	case <-ctx.Done():
-		m.Logger.Warn().Msg("Timeout reached while collecting memory stats")
-		return nil
-	}
-}
-
-// getDiskUsage collects disk usage information
-func (m *MetricsService) getDiskUsage(ctx context.Context) *float64 {
-	diskStatsCh := make(chan *disk.UsageStat, 1)
-	go func() {
-		diskStats, err := disk.Usage("/")
-		if err != nil {
-			m.Logger.Error().Err(err).Msg("Failed to get disk usage")
-			diskStatsCh <- nil
-			return
-		}
-		diskStatsCh <- diskStats
-	}()
-	select {
-	case diskStats := <-diskStatsCh:
-		if diskStats != nil {
-			return &diskStats.UsedPercent
-		}
-		return nil
-	case <-ctx.Done():
-		m.Logger.Warn().Msg("Timeout reached while collecting disk usage")
-		return nil
-	}
-}
-
-// getNetworkStats collects network I/O statistics
-func (m *MetricsService) getNetworkStats(ctx context.Context) (*float64, *float64) {
-	netStatsCh := make(chan []net.IOCountersStat, 1)
-	go func() {
-		netStats, err := net.IOCounters(false)
-		if err != nil {
-			m.Logger.Error().Err(err).Msg("Failed to get network stats")
-			netStatsCh <- nil
-			return
-		}
-		netStatsCh <- netStats
-	}()
-	select {
-	case netStats := <-netStatsCh:
-		if len(netStats) > 0 {
-			bytesRecv := float64(netStats[0].BytesRecv)
-			bytesSent := float64(netStats[0].BytesSent)
-			return &bytesRecv, &bytesSent
-		}
-		return nil, nil
-	case <-ctx.Done():
-		m.Logger.Warn().Msg("Timeout reached while collecting network stats")
-		return nil, nil
-	}
-}
-
-// getProcessMetrics collects metrics for specific processes
-func (m *MetricsService) getProcessMetrics(config *models.MetricsConfig, metrics *models.SystemMetrics, ctx context.Context) {
-	procsCh := make(chan []*process.Process, 1)
-	go func() {
-		procs, err := process.Processes()
-		if err != nil {
-			m.Logger.Error().Err(err).Msg("Failed to get process metrics")
-			procsCh <- nil
-			return
-		}
-		procsCh <- procs
-	}()
-	select {
-	case procs := <-procsCh:
-		for _, proc := range procs {
-			name, err := proc.Name()
-			if err != nil {
-				continue
-			}
-			for _, procName := range config.ProcessNames {
-				if name == procName {
-					procMetrics := &models.ProcessMetrics{}
-
-					// Collect process-specific metrics based on configuration
-					if config.MonitorProcCPU {
-						procMetrics.CPUUsage = m.getProcessCPU(proc)
-					}
-
-					if config.MonitorProcMem {
-						procMetrics.Memory = m.getProcessMemory(proc)
-					}
-
-					readOps, writeOps := m.getProcessIOPS(proc)
-					procMetrics.ReadOps = readOps
-					procMetrics.WriteOps = writeOps
-
-					// Store the process metrics
-					metrics.Processes[procName] = procMetrics
-					m.Logger.Debug().Str("process", procName).Msg("Process metrics collected")
-				}
-			}
-		}
-	case <-ctx.Done():
-		m.Logger.Warn().Msg("Timeout reached while collecting process metrics")
-	}
-}
-
-// getProcessCPU collects CPU usage for a specific process
-func (m *MetricsService) getProcessCPU(p *process.Process) *float64 {
-	procCPU, err := p.CPUPercent()
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process CPU usage")
-		return nil
-	}
-	return &procCPU
-}
-
-// getProcessMemory collects memory usage for a specific process
-func (m *MetricsService) getProcessMemory(p *process.Process) *float64 {
-	procMem, err := p.MemoryInfo()
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process memory usage")
-		return nil
-	}
-	rss := float64(procMem.RSS)
-	return &rss
-}
-
-// getProcessIOPS collects I/O operations for a specific process
-func (m *MetricsService) getProcessIOPS(p *process.Process) (*float64, *float64) {
-	ioCounters, err := p.IOCounters()
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process I/O counters")
-		return nil, nil
-	}
-
-	readOps := float64(ioCounters.ReadCount)
-	writeOps := float64(ioCounters.WriteCount)
-
-	return &readOps, &writeOps
+	m.Logger.Error().Msg("Failed to publish metrics after retries")
+	return fmt.Errorf("failed to publish metrics after %d retries", retries)
 }
