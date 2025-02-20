@@ -14,19 +14,24 @@ type MemoryMetricCollector struct {
 }
 
 func (m *MemoryMetricCollector) Name() string {
-	return "Memory"
+	return "memory"
 }
 
 func (m *MemoryMetricCollector) Collect(ctx context.Context) interface{} {
+	m.Logger.Debug().Msg("Starting memory usage collection")
 	memStats, err := mem.VirtualMemory()
 	if err != nil {
 		m.Logger.Error().Err(err).Msg("Failed to get memory stats")
 		return nil
 	}
+	m.Logger.Debug().Float64("memory_usage", memStats.UsedPercent).Msg("Memory usage collected successfully")
 	return &memStats.UsedPercent
 }
 
 func (m *MemoryMetricCollector) IsEnabled(config *models.MetricsConfig) bool {
+	if !config.MonitorMemory {
+		m.Logger.Warn().Msg("Memory monitoring is disabled in configuration")
+	}
 	return config.MonitorMemory
 }
 

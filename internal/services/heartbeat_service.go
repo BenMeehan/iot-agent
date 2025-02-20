@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -24,9 +25,9 @@ type HeartbeatService struct {
 	JWTManager jwt.JWTManagerInterface
 	Logger     zerolog.Logger
 
-	stopChan chan struct{}
-	running  bool
-	mu       sync.Mutex
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewHeartbeatService initializes a new HeartbeatService.
@@ -41,24 +42,42 @@ func NewHeartbeatService(pubTopic string, interval time.Duration, deviceInfo ide
 		MqttClient: mqttClient,
 		JWTManager: jwtManager,
 		Logger:     logger,
-		stopChan:   make(chan struct{}), // Initialize only once
 	}
 }
 
 // Start launches the heartbeat loop in a separate goroutine.
 func (h *HeartbeatService) Start() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.running {
+	if h.ctx != nil {
 		h.Logger.Warn().Msg("HeartbeatService is already running")
 		return errors.New("heartbeat service is already running")
 	}
 
-	h.running = true
+	h.ctx, h.cancel = context.WithCancel(context.Background())
 
-	go h.runHeartbeatLoop()
+	h.wg.Add(1)
+	go func() {
+		defer h.wg.Done()
+		h.runHeartbeatLoop()
+	}()
+
 	h.Logger.Info().Str("topic", h.PubTopic).Msg("HeartbeatService started successfully")
+	return nil
+}
+
+// Stop gracefully stops the heartbeat service.
+func (h *HeartbeatService) Stop() error {
+	if h.ctx == nil {
+		h.Logger.Warn().Msg("HeartbeatService is not running")
+		return errors.New("heartbeat service is not running")
+	}
+
+	h.cancel()
+	h.wg.Wait()
+
+	h.ctx = nil
+	h.cancel = nil
+
+	h.Logger.Info().Msg("HeartbeatService stopped successfully")
 	return nil
 }
 
@@ -83,7 +102,6 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				continue
 			}
 
-			// Publish heartbeat message
 			token := h.MqttClient.Publish(h.PubTopic, byte(h.QOS), false, payload)
 			token.Wait()
 
@@ -93,30 +111,9 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				h.Logger.Debug().Msg("Heartbeat published successfully")
 			}
 
-		case <-h.stopChan:
-			h.mu.Lock()
-			h.running = false
-			h.mu.Unlock()
-			h.Logger.Info().Msg("HeartbeatService stopped")
+		case <-h.ctx.Done():
+			h.Logger.Info().Msg("HeartbeatService stopping gracefully")
 			return
 		}
 	}
-}
-
-// Stop gracefully stops the heartbeat service.
-func (h *HeartbeatService) Stop() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if !h.running {
-		h.Logger.Warn().Msg("HeartbeatService is not running")
-		return errors.New("heartbeat service is not running")
-	}
-
-	close(h.stopChan)
-	h.stopChan = make(chan struct{}) // Reinitialize for future restarts
-	h.running = false
-
-	h.Logger.Info().Msg("HeartbeatService stopped successfully")
-	return nil
 }

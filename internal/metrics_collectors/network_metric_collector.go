@@ -10,8 +10,8 @@ import (
 
 // NetworkMetrics contains network I/O metrics.
 type NetworkMetrics struct {
-	NetworkIn  *float64
-	NetworkOut *float64
+	NetworkIn  float64 `json:"network_in,omitempty"`
+	NetworkOut float64 `json:"network_out,omitempty"`
 }
 
 // NetworkMetricCollector collects network I/O metrics.
@@ -20,10 +20,11 @@ type NetworkMetricCollector struct {
 }
 
 func (n *NetworkMetricCollector) Name() string {
-	return "Network"
+	return "network"
 }
 
 func (n *NetworkMetricCollector) Collect(ctx context.Context) interface{} {
+	n.Logger.Debug().Msg("Starting network I/O metrics collection")
 	netStats, err := net.IOCounters(false)
 	if err != nil {
 		n.Logger.Error().Err(err).Msg("Failed to get network stats")
@@ -32,15 +33,20 @@ func (n *NetworkMetricCollector) Collect(ctx context.Context) interface{} {
 	if len(netStats) > 0 {
 		bytesRecv := float64(netStats[0].BytesRecv)
 		bytesSent := float64(netStats[0].BytesSent)
+		n.Logger.Debug().Float64("network_in", bytesRecv).Float64("network_out", bytesSent).Msg("Network I/O metrics collected successfully")
 		return NetworkMetrics{
-			NetworkIn:  &bytesRecv,
-			NetworkOut: &bytesSent,
+			NetworkIn:  bytesRecv,
+			NetworkOut: bytesSent,
 		}
 	}
+	n.Logger.Warn().Msg("No network statistics available")
 	return nil
 }
 
 func (n *NetworkMetricCollector) IsEnabled(config *models.MetricsConfig) bool {
+	if !config.MonitorNetwork {
+		n.Logger.Warn().Msg("Network monitoring is disabled in configuration")
+	}
 	return config.MonitorNetwork
 }
 

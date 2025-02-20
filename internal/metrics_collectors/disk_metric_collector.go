@@ -14,19 +14,24 @@ type DiskMetricCollector struct {
 }
 
 func (d *DiskMetricCollector) Name() string {
-	return "Disk"
+	return "disk"
 }
 
 func (d *DiskMetricCollector) Collect(ctx context.Context) interface{} {
+	d.Logger.Debug().Msg("Starting disk usage collection")
 	diskStats, err := disk.Usage("/")
 	if err != nil {
 		d.Logger.Error().Err(err).Msg("Failed to get disk usage")
 		return nil
 	}
+	d.Logger.Debug().Float64("disk_usage", diskStats.UsedPercent).Msg("Disk usage collected successfully")
 	return &diskStats.UsedPercent
 }
 
 func (d *DiskMetricCollector) IsEnabled(config *models.MetricsConfig) bool {
+	if !config.MonitorDisk {
+		d.Logger.Warn().Msg("Disk monitoring is disabled in configuration")
+	}
 	return config.MonitorDisk
 }
 
