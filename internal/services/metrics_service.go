@@ -254,7 +254,7 @@ func (m *MetricsService) collectMetrics() *models.SystemMetrics {
 	}
 
 	wg.Wait()
-	m.logger.Info().Interface("metrics", metrics).Msg("Metrics collected successfully")
+	m.logger.Debug().Interface("metrics", metrics).Msg("Metrics collected successfully")
 	return metrics
 }
 
