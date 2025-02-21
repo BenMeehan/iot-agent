@@ -5,6 +5,6 @@
   "monitor_network": true,
   "process_names": ["bash"],
   "monitor_proc_cpu": true,
-  "monitor_proc_mem": false,
-  "monitor_proc_iops": false
+  "monitor_proc_mem": true,
+  "monitor_proc_iops": true
 }
