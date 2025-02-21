@@ -198,13 +198,13 @@ func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, ser
 
 	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
 
-	go s.acceptConnections(listener, remotePort, backendHost, serverId)
+	go s.acceptConnections(listener, remotePort)
 
 	return nil
 }
 
 // acceptConnections handles incoming connections on the listener
-func (s *SSHService) acceptConnections(listener net.Listener, remotePort int, backendHost, serverId string) {
+func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
 	defer listener.Close()
 
 	for {

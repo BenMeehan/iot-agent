@@ -15,18 +15,19 @@ services:
     topic: "iot-registration"
     qos: 2
     max_backoff_seconds: 60
-    enabled: true
+    enabled: false
   heartbeat:
     topic: "iot-heartbeat"
     interval: 10
     qos: 1
-    enabled: true
+    enabled: false
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
     interval: 10
+    timeout: 5
     qos: 1
-    enabled: false
+    enabled: true
   command_service:
     topic: "iot-commands"
     qos: 2

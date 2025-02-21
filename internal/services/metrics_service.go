@@ -1,265 +1,295 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/metrics_collectors"
 	"github.com/benmeehan/iot-agent/internal/models"
+	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/disk"
-	"github.com/shirou/gopsutil/mem"
-	"github.com/shirou/gopsutil/net"
 	"github.com/shirou/gopsutil/process"
 )
 
-// MetricsService manages device telemetry
+// MetricsService handles system telemetry collection and publishing over MQTT.
 type MetricsService struct {
-	PubTopic          string
-	MetricsConfigFile string
-	Interval          time.Duration
-	DeviceInfo        identity.DeviceInfoInterface
-	QOS               int
-	MqttClient        mqtt.MQTTClient
-	FileClient        file.FileOperations
-	Logger            zerolog.Logger
-	stopChan          chan struct{}
-	running           bool
+	pubTopic          string
+	metricsConfigFile string
+	metricsConfig     *models.MetricsConfig
+	interval          time.Duration
+	deviceInfo        identity.DeviceInfoInterface
+	qos               int
+	mqttClient        mqtt.MQTTClient
+	fileClient        file.FileOperations
+	logger            zerolog.Logger
+	timeout           time.Duration
+	registry          *metrics_collectors.MetricsRegistry
+	workerPool        *utils.WorkerPool
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
-// NewMetricsService creates and returns a new instance of MetricsService.
-func NewMetricsService(pubTopic, metricsConfigFile string, interval time.Duration,
-	deviceInfo identity.DeviceInfoInterface, qos int, mqttClient mqtt.MQTTClient,
-	fileClient file.FileOperations, logger zerolog.Logger) *MetricsService {
-
-	return &MetricsService{
-		PubTopic:          pubTopic,
-		MetricsConfigFile: metricsConfigFile,
-		Interval:          interval,
-		DeviceInfo:        deviceInfo,
-		QOS:               qos,
-		MqttClient:        mqttClient,
-		FileClient:        fileClient,
-		Logger:            logger,
-		stopChan:          make(chan struct{}),
-		running:           false,
+// NewMetricsService initializes and returns a new instance of MetricsService.
+func NewMetricsService(
+	pubTopic, metricsConfigFile string,
+	interval, timeout time.Duration,
+	deviceInfo identity.DeviceInfoInterface,
+	qos int,
+	mqttClient mqtt.MQTTClient,
+	fileClient file.FileOperations,
+	logger zerolog.Logger,
+) *MetricsService {
+	service := &MetricsService{
+		pubTopic:          pubTopic,
+		metricsConfigFile: metricsConfigFile,
+		interval:          interval,
+		timeout:           timeout,
+		deviceInfo:        deviceInfo,
+		qos:               qos,
+		mqttClient:        mqttClient,
+		fileClient:        fileClient,
+		logger:            logger,
+		registry:          metrics_collectors.NewMetricsRegistry(),
+		workerPool:        utils.NewWorkerPool(10),
 	}
+
+	// Register default metric collectors
+	service.registerDefaultCollectors()
+
+	return service
 }
 
-// Start begins periodic metrics collection and publishing
+// registerDefaultCollectors registers the default metric collectors.
+func (m *MetricsService) registerDefaultCollectors() {
+	m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
+	m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
+	m.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: m.logger})
+	m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
+}
+
+// Start initiates periodic metrics collection and publishing.
 func (m *MetricsService) Start() error {
-	if m.running {
-		m.Logger.Warn().Msg("MetricsService is already running")
+	if m.ctx != nil {
+		m.logger.Warn().Msg("MetricsService is already running")
 		return errors.New("metrics service is already running")
 	}
 
-	config, err := m.LoadMetricsConfig()
+	m.logger.Info().Msg("Starting MetricsService...")
+
+	// Load and validate metrics configuration
+	config, err := m.loadAndValidateMetricsConfig()
 	if err != nil {
-		m.Logger.Error().Err(err).Msg("Error loading metrics config")
+		m.logger.Error().Err(err).Msg("Failed to load or validate metrics configuration")
 		return err
 	}
+	m.metricsConfig = config
 
-	m.stopChan = make(chan struct{})
-	m.running = true
-
-	go func() {
-		ticker := time.NewTicker(m.Interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				metrics := m.CollectMetrics(config)
-				metrics.DeviceID = m.DeviceInfo.GetDeviceID()
-				if err := m.PublishMetrics(metrics); err != nil {
-					m.Logger.Error().Err(err).Msg("Error publishing metrics")
-				}
-			case <-m.stopChan:
-				m.Logger.Info().Msg("Stopping MetricsService")
-				m.running = false
-				return
-			}
+	// Register process metrics collector if required
+	if len(config.ProcessNames) > 0 {
+		if err := m.registerProcessMetricsCollector(config); err != nil {
+			m.logger.Error().Err(err).Msg("Failed to register process metrics collector")
+			return err
 		}
-	}()
+	}
 
-	m.Logger.Info().Str("topic", m.PubTopic).Msg("MetricsService started")
+	// Start the metrics collection loop
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.wg.Add(1)
+	go m.runMetricsCollectionLoop()
+
+	m.logger.Info().Str("topic", m.pubTopic).Msg("MetricsService started successfully")
 	return nil
 }
 
-// Stop stops the metrics service gracefully
-func (m *MetricsService) Stop() error {
-	if !m.running {
-		m.Logger.Warn().Msg("MetricsService is not running")
-		return errors.New("metrics service is not running")
-	}
-
-	if m.stopChan == nil {
-		m.Logger.Error().Msg("Failed to stop MetricsService: stop channel is nil")
-		return errors.New("stop channel is nil")
-	}
-
-	close(m.stopChan)
-	m.running = false
-	m.Logger.Info().Msg("MetricsService stopped")
-	return nil
-}
-
-// LoadMetricsConfig loads and parses the configuration for metrics
-func (m *MetricsService) LoadMetricsConfig() (*models.MetricsConfig, error) {
-	data, err := m.FileClient.ReadFile(m.MetricsConfigFile)
+// loadAndValidateMetricsConfig loads and validates the metrics configuration.
+func (m *MetricsService) loadAndValidateMetricsConfig() (*models.MetricsConfig, error) {
+	config, err := m.loadMetricsConfig()
 	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to read config file")
+		return nil, fmt.Errorf("failed to load metrics config: %w", err)
+	}
+
+	if err := m.validateMetricsConfig(config); err != nil {
+		return nil, fmt.Errorf("invalid metrics config: %w", err)
+	}
+
+	return config, nil
+}
+
+// loadMetricsConfig reads and parses the metrics configuration file.
+func (m *MetricsService) loadMetricsConfig() (*models.MetricsConfig, error) {
+	data, err := m.fileClient.ReadFileRaw(m.metricsConfigFile)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var config models.MetricsConfig
-	err = json.Unmarshal([]byte(data), &config)
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to unmarshal config")
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	m.Logger.Info().Msg("Metrics configuration loaded successfully")
+	m.logger.Info().Msg("Metrics configuration loaded successfully")
 	return &config, nil
 }
 
-// CollectMetrics gathers system and process metrics
-func (m *MetricsService) CollectMetrics(config *models.MetricsConfig) *models.SystemMetrics {
-	metrics := &models.SystemMetrics{
-		Timestamp: time.Now().UTC(),
-		Processes: make(map[string]*models.ProcessMetrics),
+// validateMetricsConfig checks if the provided configuration is valid.
+func (m *MetricsService) validateMetricsConfig(config *models.MetricsConfig) error {
+	if !config.MonitorCPU && !config.MonitorMemory && !config.MonitorDisk &&
+		!config.MonitorNetwork && len(config.ProcessNames) == 0 {
+		return errors.New("no metrics enabled in configuration")
 	}
 
-	if config.MonitorCPU {
-		metrics.CPUUsage = m.getCPUUsage()
-	}
-	if config.MonitorMemory {
-		metrics.Memory = m.getMemoryStats()
-	}
-	if config.MonitorDisk {
-		metrics.Disk = m.getDiskUsage()
-	}
-	if config.MonitorNetwork {
-		metrics.Network = m.getNetworkStats()
-	}
-	if len(config.ProcessNames) > 0 {
-		m.getProcessMetrics(config, metrics)
+	if len(config.ProcessNames) > 0 && !config.MonitorProcCPU && !config.MonitorProcMem && !config.MonitorProcIOps {
+		return errors.New("process names specified but no process metrics enabled")
 	}
 
-	m.Logger.Info().Interface("metrics", metrics).Msg("Metrics collected successfully")
-	return metrics
-}
-
-// PublishMetrics sends the collected metrics via MQTT
-func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
-	metricsData, err := json.Marshal(metrics)
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to marshal metrics")
-		return fmt.Errorf("failed to marshal metrics: %w", err)
-	}
-
-	token := m.MqttClient.Publish(m.PubTopic, byte(m.QOS), false, metricsData)
-	if token.Wait() && token.Error() != nil {
-		m.Logger.Error().Err(token.Error()).Msg("Failed to publish metrics via MQTT")
-		return fmt.Errorf("failed to publish metrics: %w", token.Error())
-	}
-
-	m.Logger.Info().Msg("Metrics published successfully")
 	return nil
 }
 
-// Helper functions to gather individual metrics
-
-func (m *MetricsService) getCPUUsage() *float64 {
-	cpuPercentages, err := cpu.Percent(0, false)
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get CPU usage")
-		return nil
-	}
-	return &cpuPercentages[0]
-}
-
-func (m *MetricsService) getMemoryStats() *float64 {
-	memStats, err := mem.VirtualMemory()
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get memory stats")
-		return nil
-	}
-	return &memStats.UsedPercent
-}
-
-func (m *MetricsService) getDiskUsage() *float64 {
-	diskStats, err := disk.Usage("/")
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get disk usage")
-		return nil
-	}
-	return &diskStats.UsedPercent
-}
-
-func (m *MetricsService) getNetworkStats() *float64 {
-	netStats, err := net.IOCounters(false)
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get network stats")
-		return nil
-	}
-	bytesRecv := float64(netStats[0].BytesRecv)
-	return &bytesRecv
-}
-
-// getProcessMetrics gathers metrics for all processes specified in the config
-func (m *MetricsService) getProcessMetrics(config *models.MetricsConfig, metrics *models.SystemMetrics) {
+// registerProcessMetricsCollector filters and registers processes specified in the configuration
+// for metrics collection. It identifies running processes that match the configured names and
+// sets up a ProcessMetricCollector to monitor CPU, memory, and I/O metrics for these processes.
+func (m *MetricsService) registerProcessMetricsCollector(config *models.MetricsConfig) error {
 	procs, err := process.Processes()
 	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process metrics")
-		return
+		return fmt.Errorf("failed to retrieve process list: %w", err)
 	}
+
+	requiredProcs := utils.SliceToSet(config.ProcessNames)
+	filteredProcs := make([]*process.Process, 0)
 
 	for _, proc := range procs {
 		name, err := proc.Name()
 		if err != nil {
 			continue
 		}
+		name = strings.ToLower(name)
+		if _, exists := requiredProcs[name]; exists {
+			filteredProcs = append(filteredProcs, proc)
+		}
+	}
 
-		for _, procName := range config.ProcessNames {
-			if name == procName {
-				procMetrics := &models.ProcessMetrics{}
+	m.registry.Register(&metrics_collectors.ProcessMetricCollector{
+		Logger:         m.logger,
+		ProcessNames:   filteredProcs,
+		MonitorProcCPU: config.MonitorProcCPU,
+		MonitorProcMem: config.MonitorProcMem,
+		MonitorProcIO:  config.MonitorProcIOps,
+		WorkerPool:     m.workerPool,
+	})
 
-				if config.MonitorProcCPU {
-					procMetrics.CPUUsage = m.getProcessCPU(proc)
-				}
+	return nil
+}
 
-				if config.MonitorProcMem {
-					procMetrics.Memory = m.getProcessMemory(proc)
-				}
+// runMetricsCollectionLoop runs the main metrics collection and publishing loop.
+func (m *MetricsService) runMetricsCollectionLoop() {
+	defer m.wg.Done()
 
-				metrics.Processes[procName] = procMetrics
-				m.Logger.Info().Str("process", procName).Msg("Process metrics collected")
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			metrics := m.collectMetrics()
+			metrics.DeviceID = m.deviceInfo.GetDeviceID()
+
+			if err := m.publishMetrics(metrics); err != nil {
+				m.logger.Error().Err(err).Msg("Failed to publish metrics")
 			}
+		case <-m.ctx.Done():
+			m.logger.Info().Msg("Stopping metrics collection")
+			return
 		}
 	}
 }
 
-func (m *MetricsService) getProcessCPU(p *process.Process) *float64 {
-	procCPU, err := p.CPUPercent()
-	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process CPU usage")
-		return nil
+// collectMetrics gathers system and process metrics concurrently.
+func (m *MetricsService) collectMetrics() *models.SystemMetrics {
+	metrics := &models.SystemMetrics{
+		Timestamp: time.Now().UTC(),
+		Metrics:   make(map[string]models.Metric),
+		Processes: make(map[string]*models.ProcessMetrics),
 	}
-	return &procCPU
+
+	ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	metricsMutex := &sync.Mutex{}
+
+	for name, collector := range m.registry.GetCollectors() {
+		if collector.IsEnabled(m.metricsConfig) {
+			wg.Add(1)
+			m.workerPool.Submit(func() {
+				defer wg.Done()
+				collectedValue := collector.Collect(ctx)
+
+				metricsMutex.Lock()
+				defer metricsMutex.Unlock()
+
+				if name == "process" {
+					if processMetrics, ok := collectedValue.(map[string]*models.ProcessMetrics); ok {
+						for procName, procMetric := range processMetrics {
+							metrics.Processes[procName] = procMetric
+						}
+					}
+				} else {
+					metrics.Metrics[name] = models.Metric{
+						Value: collectedValue,
+						Unit:  collector.Unit(),
+					}
+				}
+			})
+		}
+	}
+
+	wg.Wait()
+	m.logger.Debug().Interface("metrics", metrics).Msg("Metrics collected successfully")
+	return metrics
 }
 
-func (m *MetricsService) getProcessMemory(p *process.Process) *float64 {
-	procMem, err := p.MemoryInfo()
+// publishMetrics sends the collected metrics via MQTT.
+func (m *MetricsService) publishMetrics(metrics *models.SystemMetrics) error {
+	metricsData, err := json.Marshal(metrics)
 	if err != nil {
-		m.Logger.Error().Err(err).Msg("Failed to get process memory usage")
-		return nil
+		return fmt.Errorf("failed to serialize metrics: %w", err)
 	}
-	rss := float64(procMem.RSS)
-	return &rss
+
+	retries := 3
+	for i := 0; i < retries; i++ {
+		token := m.mqttClient.Publish(m.pubTopic, byte(m.qos), false, metricsData)
+		if token.Wait() && token.Error() == nil {
+			m.logger.Debug().Msg("Metrics published successfully")
+			return nil
+		}
+		m.logger.Warn().Err(token.Error()).Int("retry", i+1).Msg("Retrying to publish metrics...")
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+
+	return fmt.Errorf("failed to publish metrics after %d retries", retries)
+}
+
+// Stop gracefully stops the metrics service.
+func (m *MetricsService) Stop() error {
+	if m.ctx == nil {
+		m.logger.Warn().Msg("MetricsService is not running")
+		return errors.New("metrics service is not running")
+	}
+
+	m.logger.Info().Msg("Stopping MetricsService...")
+	m.cancel()
+	m.wg.Wait()
+	m.workerPool.Shutdown()
+	m.logger.Info().Msg("MetricsService stopped successfully")
+	return nil
 }

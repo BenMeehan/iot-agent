@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/Masterminds/semver/v3"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -291,7 +292,7 @@ func (u *UpdateService) downloadUpdateFile(url string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		err := errors.New("error downloading update file, received non-OK status")
-		u.Logger.Info().Str("statusCode", string(resp.StatusCode)).Err(err).Msg("Download failed")
+		u.Logger.Info().Str("statusCode", strconv.Itoa(resp.StatusCode)).Err(err).Msg("Download failed")
 		return err
 	}
 
