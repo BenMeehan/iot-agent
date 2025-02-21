@@ -66,7 +66,7 @@ Detailed service documentation is available in the [`/docs`](./docs/) directory.
 - Sends periodic heartbeat messages to indicate device activity.
 
 ### 3. Metrics Service
-- Collects system metrics (CPU, memory, disk usage) and sends them via MQTT.
+- Collects system metrics (CPU, memory, disk usage, network in/out, process metrics) and sends them via MQTT.
 
 ### 4. Command Service
 - Executes commands on the IoT device and publishes output via MQTT.
