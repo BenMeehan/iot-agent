@@ -126,7 +126,7 @@ func TestRegistrationService_Register_Success(t *testing.T) {
 	}
 
 	// Run the registration
-	err := rs.Register(payload)
+	err := rs.RetryRegistration(payload)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -153,7 +153,7 @@ func TestRegistrationService_Register_FailEncrypt(t *testing.T) {
 		Logger:            logger,
 	}
 
-	err := rs.Register(payload)
+	err := rs.RetryRegistration(payload)
 	assert.Error(t, err)
 	mockEncryption.AssertExpectations(t)
 }

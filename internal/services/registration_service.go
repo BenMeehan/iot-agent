@@ -84,7 +84,7 @@ func (rs *RegistrationService) Start() error {
 		if !valid {
 			rs.Logger.Warn().Msg("JWT token is invalid, attempting re-registration")
 			payload := models.RegistrationPayload{DeviceID: existingDeviceID}
-			return rs.retryRegistration(payload)
+			return rs.RetryRegistration(payload)
 		}
 
 		rs.Logger.Info().Msg("Device is already registered and JWT is valid")
@@ -98,11 +98,11 @@ func (rs *RegistrationService) Start() error {
 		Metadata: rs.DeviceInfo.GetDeviceIdentity().Metadata,
 	}
 
-	return rs.retryRegistration(payload)
+	return rs.RetryRegistration(payload)
 }
 
 // retryRegistration implements retries with controlled exponential backoff.
-func (rs *RegistrationService) retryRegistration(payload models.RegistrationPayload) error {
+func (rs *RegistrationService) RetryRegistration(payload models.RegistrationPayload) error {
 	backoff := 1 * time.Second
 	maxBackoff := time.Duration(rs.MaxBackoffSeconds) * time.Second
 	retryCount := 0
