@@ -4,11 +4,11 @@ import "time"
 
 // SystemMetrics represents the system metrics collected at a specific time.
 type SystemMetrics struct {
-	Timestamp time.Time                  `json:"timestamp"`           // The timestamp when the metrics were collected
-	DeviceID  string                     `json:"device_id"`           // Unique identifier for the device
-	Metrics   map[string]Metric          `json:"metrics"`             // Map of metric names to their values
-	Processes map[string]*ProcessMetrics `json:"processes,omitempty"` // Map of process names to their metrics (optional)
-	JWTToken  string                     `json:"jwt_token"`           // JWTToken is an authentication token used to verify the identity of the device.
+	Timestamp time.Time         `json:"timestamp"`           // The timestamp when the metrics were collected
+	DeviceID  string            `json:"device_id"`           // Unique identifier for the device
+	Metrics   map[string]Metric `json:"metrics"`             // Map of metric names to their values
+	Processes []*ProcessMetrics `json:"processes,omitempty"` // Slick of process metrics (optional)
+	JWTToken  string            `json:"jwt_token"`           // JWTToken is an authentication token used to verify the identity of the device.
 }
 
 // Metric represents a single metric with its value and metadata.
@@ -20,10 +20,12 @@ type Metric struct {
 
 // ProcessMetrics contains metrics for an individual process running on the system.
 type ProcessMetrics struct {
-	CPUUsage float64 `json:"cpu_usage,omitempty"` // CPU usage by the process as a percentage (optional)
-	Memory   float64 `json:"memory,omitempty"`    // Memory usage by the process in bytes (optional)
-	ReadOps  float64 `json:"read_ops,omitempty"`  // Number of read operations performed by the process (optional)
-	WriteOps float64 `json:"write_ops,omitempty"` // Number of write operations performed by the process (optional)
+	ProcessName string  `json:"process_name"`        // Name of the process
+	ProcessID   int32   `json:"process_id"`          // ID of the process
+	CPUUsage    float64 `json:"cpu_usage,omitempty"` // CPU usage by the process as a percentage (optional)
+	Memory      float64 `json:"memory,omitempty"`    // Memory usage by the process in bytes (optional)
+	ReadOps     float64 `json:"read_ops,omitempty"`  // Number of read operations performed by the process (optional)
+	WriteOps    float64 `json:"write_ops,omitempty"` // Number of write operations performed by the process (optional)
 }
 
 // MetricsConfig defines the structure of the configuration file for the metrics to be monitored.

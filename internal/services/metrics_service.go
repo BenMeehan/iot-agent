@@ -212,7 +212,7 @@ func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 	metrics := &models.SystemMetrics{
 		Timestamp: time.Now().UTC(),
 		Metrics:   make(map[string]models.Metric),
-		Processes: make(map[string]*models.ProcessMetrics),
+		Processes: make([]*models.ProcessMetrics, 0),
 	}
 
 	ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
@@ -232,10 +232,9 @@ func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 				defer metricsMutex.Unlock()
 
 				if name == "process" {
-					if processMetrics, ok := collectedValue.(map[string]*models.ProcessMetrics); ok {
-						for procName, procMetric := range processMetrics {
-							metrics.Processes[procName] = procMetric
-						}
+					if processMetrics, ok := collectedValue.([]*models.ProcessMetrics); ok {
+						metrics.Processes = append(metrics.Processes, processMetrics...)
+
 					}
 				} else {
 					metrics.Metrics[name] = models.Metric{
@@ -248,7 +247,7 @@ func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 	}
 
 	wg.Wait()
-	m.logger.Debug().Interface("metrics", metrics).Msg("Metrics collected successfully")
+	m.logger.Info().Interface("metrics", metrics).Msg("Metrics collected successfully")
 	return metrics
 }
 

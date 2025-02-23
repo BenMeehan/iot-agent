@@ -29,7 +29,7 @@ func (p *ProcessMetricCollector) Name() string {
 func (p *ProcessMetricCollector) Collect(ctx context.Context) interface{} {
 	p.logDisabledMetrics()
 
-	processMetrics := make(map[string]*models.ProcessMetrics)
+	processMetrics := make([]*models.ProcessMetrics, 0)
 	var wg sync.WaitGroup
 	var metricsMutex sync.Mutex
 
@@ -49,7 +49,7 @@ func (p *ProcessMetricCollector) Collect(ctx context.Context) interface{} {
 				// Collect and store metrics for the process.
 				metrics := p.collectProcessMetrics(proc, name)
 				metricsMutex.Lock()
-				processMetrics[name] = metrics
+				processMetrics = append(processMetrics, metrics)
 				metricsMutex.Unlock()
 			}
 		}(proc))
@@ -70,6 +70,9 @@ func (p *ProcessMetricCollector) Collect(ctx context.Context) interface{} {
 // collectProcessMetrics gathers enabled metrics (CPU, memory, I/O) for a single process.
 func (p *ProcessMetricCollector) collectProcessMetrics(proc *process.Process, name string) *models.ProcessMetrics {
 	metrics := &models.ProcessMetrics{}
+
+	metrics.ProcessName = name
+	metrics.ProcessID = proc.Pid
 
 	// Collect CPU usage if enabled.
 	if p.MonitorProcCPU {
