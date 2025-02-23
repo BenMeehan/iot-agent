@@ -1,1 +1,20 @@
-{"device_id":"0194f077-3133-7c00-8567-26e244cb3b61","device_name":"SmartSensor-001","org_id":"iot-org-123","metadata":{"network_ip":"192.168.1.100","network_ssid":"IoT-Network","network_signal_strength":-65,"network_mac_address":"00:1A:2B:3C:4D:5E","hardware_model":"XYZ-2000","hardware_serial_number":"SN123456789","hardware_firmware_version":"v1.2.3","hardware_battery_level":85,"software_os_version":"Linux 5.4.0","software_app_version":"2.0.1","software_last_update":1674835200,"custom_field_1":"value1","custom_field_2":"value2"}}
+{
+  "device_id": "0194f077-3133-7c00-8567-26e244cb3b61",
+  "device_name": "SmartSensor-001",
+  "org_id": "iot-org-123",
+  "metadata": {
+    "network_ip": "192.168.1.100",
+    "network_ssid": "IoT-Network",
+    "network_signal_strength": -65,
+    "network_mac_address": "00:1A:2B:3C:4D:5E",
+    "hardware_model": "XYZ-2000",
+    "hardware_serial_number": "SN123456789",
+    "hardware_firmware_version": "v1.2.3",
+    "hardware_battery_level": 85,
+    "software_os_version": "Linux 5.4.0",
+    "software_app_version": "2.0.1",
+    "software_last_update": 1674835200,
+    "custom_field_1": "value1",
+    "custom_field_2": "value2"
+  }
+}

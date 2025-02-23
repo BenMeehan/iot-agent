@@ -1,0 +1,24 @@
+graph TD;
+    A[Start Registration Service] -->|Check Existing Device ID| B{Device ID Found?};
+    
+    B -- No --> C[Create Registration Payload];
+    B -- Yes --> D[Validate JWT Token];
+
+    D -- Valid --> E[Device Already Registered];
+    D -- Invalid --> F[Re-registration Needed];
+    
+    C --> G[Encrypt Payload] --> H[Attempt Registration];
+    F --> G;
+
+    H -->|Success| I[Save Device ID & JWT];
+    H -->|Failure| J{Retry?};
+
+    J -- Yes --> K[Exponential Backoff];
+    J -- No --> L[Log Failure];
+
+    I --> M[Registration Complete];
+    L --> N[Exit];
+
+    subgraph Retry Mechanism
+        K -->|Wait & Retry| H;
+    end

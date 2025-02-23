@@ -17,38 +17,43 @@ import (
 
 // HeartbeatService manages periodic heartbeat messages.
 type HeartbeatService struct {
-	PubTopic   string
-	Interval   time.Duration
-	DeviceInfo identity.DeviceInfoInterface
-	QOS        int
-	MqttClient mqtt.MQTTClient
-	JWTManager jwt.JWTManagerInterface
-	Logger     zerolog.Logger
+	// Configuration fields
+	pubTopic string
+	interval time.Duration
+	qos      int
 
+	// Dependencies
+	deviceInfo identity.DeviceInfoInterface
+	mqttClient mqtt.MQTTClient
+	jwtManager jwt.JWTManagerInterface
+	logger     zerolog.Logger
+
+	// Internal state management
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// NewHeartbeatService initializes a new HeartbeatService.
-func NewHeartbeatService(pubTopic string, interval time.Duration, deviceInfo identity.DeviceInfoInterface,
-	qos int, mqttClient mqtt.MQTTClient, jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *HeartbeatService {
+// newHeartbeatService initializes a new HeartbeatService.
+func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
+	deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
+	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *HeartbeatService {
 
 	return &HeartbeatService{
-		PubTopic:   pubTopic,
-		Interval:   interval,
-		DeviceInfo: deviceInfo,
-		QOS:        qos,
-		MqttClient: mqttClient,
-		JWTManager: jwtManager,
-		Logger:     logger,
+		pubTopic:   pubTopic,
+		interval:   interval,
+		qos:        qos,
+		deviceInfo: deviceInfo,
+		mqttClient: mqttClient,
+		jwtManager: jwtManager,
+		logger:     logger,
 	}
 }
 
 // Start launches the heartbeat loop in a separate goroutine.
 func (h *HeartbeatService) Start() error {
 	if h.ctx != nil {
-		h.Logger.Warn().Msg("HeartbeatService is already running")
+		h.logger.Warn().Msg("HeartbeatService is already running")
 		return errors.New("heartbeat service is already running")
 	}
 
@@ -60,14 +65,14 @@ func (h *HeartbeatService) Start() error {
 		h.runHeartbeatLoop()
 	}()
 
-	h.Logger.Info().Str("topic", h.PubTopic).Msg("HeartbeatService started successfully")
+	h.logger.Info().Str("topic", h.pubTopic).Msg("HeartbeatService started successfully")
 	return nil
 }
 
 // Stop gracefully stops the heartbeat service.
 func (h *HeartbeatService) Stop() error {
 	if h.ctx == nil {
-		h.Logger.Warn().Msg("HeartbeatService is not running")
+		h.logger.Warn().Msg("HeartbeatService is not running")
 		return errors.New("heartbeat service is not running")
 	}
 
@@ -77,42 +82,42 @@ func (h *HeartbeatService) Stop() error {
 	h.ctx = nil
 	h.cancel = nil
 
-	h.Logger.Info().Msg("HeartbeatService stopped successfully")
+	h.logger.Info().Msg("HeartbeatService stopped successfully")
 	return nil
 }
 
 // runHeartbeatLoop continuously sends heartbeat messages at the specified interval.
 func (h *HeartbeatService) runHeartbeatLoop() {
-	ticker := time.NewTicker(h.Interval)
+	ticker := time.NewTicker(h.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			heartbeatMessage := models.Heartbeat{
-				DeviceID:  h.DeviceInfo.GetDeviceID(),
+				DeviceID:  h.deviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
 				Status:    constants.StatusAlive,
-				JWTToken:  h.JWTManager.GetJWT(),
+				JWTToken:  h.jwtManager.GetJWT(),
 			}
 
 			payload, err := json.Marshal(heartbeatMessage)
 			if err != nil {
-				h.Logger.Error().Err(err).Msg("Failed to serialize heartbeat message")
+				h.logger.Error().Err(err).Msg("Failed to serialize heartbeat message")
 				continue
 			}
 
-			token := h.MqttClient.Publish(h.PubTopic, byte(h.QOS), false, payload)
+			token := h.mqttClient.Publish(h.pubTopic, byte(h.qos), false, payload)
 			token.Wait()
 
 			if err := token.Error(); err != nil {
-				h.Logger.Error().Err(err).Msg("Failed to publish heartbeat message")
+				h.logger.Error().Err(err).Msg("Failed to publish heartbeat message")
 			} else {
-				h.Logger.Debug().Msg("Heartbeat published successfully")
+				h.logger.Debug().Msg("Heartbeat published successfully")
 			}
 
 		case <-h.ctx.Done():
-			h.Logger.Info().Msg("HeartbeatService stopping gracefully")
+			h.logger.Info().Msg("HeartbeatService stopping gracefully")
 			return
 		}
 	}

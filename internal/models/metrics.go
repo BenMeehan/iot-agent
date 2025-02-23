@@ -8,6 +8,7 @@ type SystemMetrics struct {
 	DeviceID  string                     `json:"device_id"`           // Unique identifier for the device
 	Metrics   map[string]Metric          `json:"metrics"`             // Map of metric names to their values
 	Processes map[string]*ProcessMetrics `json:"processes,omitempty"` // Map of process names to their metrics (optional)
+	JWTToken  string                     `json:"jwt_token"`           // JWTToken is an authentication token used to verify the identity of the device.
 }
 
 // Metric represents a single metric with its value and metadata.
