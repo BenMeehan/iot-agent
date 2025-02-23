@@ -1,0 +1,30 @@
+graph TD;
+    A[Start IoT Agent] -->|Initialize Logging| B[Setup Profiler];
+    B -->|Load Config| C{Config Valid?};
+    C -- No --> D[Terminate Agent];
+    C -- Yes --> E[Initialize Dependencies];
+
+    E -->|Setup File Handling| F[File System Ready];
+    E -->|Setup Encryption| G[Encryption Ready];
+    E -->|Setup JWT Authentication| H[Authentication Ready];
+    E -->|Initialize MQTT Client| I[MQTT Connected];
+
+    I --> J[Register Services];
+    J -->|Service Enabled?| K[Initialize & Start Services];
+
+    K -->|Orderly Start| L[Service Running];
+    L --> M[Listen & Process MQTT Messages];
+
+    M -->|Shutdown Signal Received?| N{Shutdown?};
+    N -- Yes --> O[Stop Services in Reverse Order];
+    O --> P[Shutdown Complete];
+    N -- No --> M;
+
+    P --> Q[Agent Stopped];
+
+    subgraph Service Lifecycle
+        K -->|Failed to Start?| R{Rollback Services};
+        R -- Yes --> S[Stop Started Services];
+        S --> D;
+        R -- No --> L;
+    end

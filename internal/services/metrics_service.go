@@ -14,32 +14,40 @@ import (
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 	"github.com/shirou/gopsutil/process"
 )
 
-// MetricsService handles system telemetry collection and publishing over MQTT.
+// MetricsService collects and publishes system telemetry data via MQTT.
 type MetricsService struct {
+	// Configuration and state management
 	pubTopic          string
 	metricsConfigFile string
 	metricsConfig     *models.MetricsConfig
 	interval          time.Duration
-	deviceInfo        identity.DeviceInfoInterface
-	qos               int
-	mqttClient        mqtt.MQTTClient
-	fileClient        file.FileOperations
-	logger            zerolog.Logger
 	timeout           time.Duration
-	registry          *metrics_collectors.MetricsRegistry
-	workerPool        *utils.WorkerPool
+	qos               int
 
+	// Dependencies
+	mqttClient mqtt.MQTTClient
+	fileClient file.FileOperations
+	deviceInfo identity.DeviceInfoInterface
+	jwtManager jwt.JWTManagerInterface
+	logger     zerolog.Logger
+
+	// Workers and registry
+	registry   *metrics_collectors.MetricsRegistry
+	workerPool *utils.WorkerPool
+
+	// Context management for graceful shutdown
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// NewMetricsService initializes and returns a new instance of MetricsService.
+// NewMetricsService initializes and returns a new MetricsService instance.
 func NewMetricsService(
 	pubTopic, metricsConfigFile string,
 	interval, timeout time.Duration,
@@ -47,29 +55,35 @@ func NewMetricsService(
 	qos int,
 	mqttClient mqtt.MQTTClient,
 	fileClient file.FileOperations,
+	jwtManager jwt.JWTManagerInterface,
 	logger zerolog.Logger,
 ) *MetricsService {
 	service := &MetricsService{
+		// Assign configurations
 		pubTopic:          pubTopic,
 		metricsConfigFile: metricsConfigFile,
 		interval:          interval,
 		timeout:           timeout,
-		deviceInfo:        deviceInfo,
 		qos:               qos,
-		mqttClient:        mqttClient,
-		fileClient:        fileClient,
-		logger:            logger,
-		registry:          metrics_collectors.NewMetricsRegistry(),
-		workerPool:        utils.NewWorkerPool(10),
+
+		// Inject dependencies
+		mqttClient: mqttClient,
+		fileClient: fileClient,
+		deviceInfo: deviceInfo,
+		jwtManager: jwtManager,
+		logger:     logger,
+
+		// Initialize supporting components
+		registry:   metrics_collectors.NewMetricsRegistry(),
+		workerPool: utils.NewWorkerPool(10),
 	}
 
 	// Register default metric collectors
 	service.registerDefaultCollectors()
-
 	return service
 }
 
-// registerDefaultCollectors registers the default metric collectors.
+// registerDefaultCollectors registers core system metric collectors.
 func (m *MetricsService) registerDefaultCollectors() {
 	m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
 	m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
@@ -77,7 +91,7 @@ func (m *MetricsService) registerDefaultCollectors() {
 	m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
 }
 
-// Start initiates periodic metrics collection and publishing.
+// Start begins periodic metrics collection and publishing.
 func (m *MetricsService) Start() error {
 	if m.ctx != nil {
 		m.logger.Warn().Msg("MetricsService is already running")
@@ -87,38 +101,53 @@ func (m *MetricsService) Start() error {
 	m.logger.Info().Msg("Starting MetricsService...")
 
 	// Load and validate metrics configuration
-	config, err := m.loadAndValidateMetricsConfig()
+	config, err := m.LoadAndValidateMetricsConfig()
 	if err != nil {
 		m.logger.Error().Err(err).Msg("Failed to load or validate metrics configuration")
 		return err
 	}
 	m.metricsConfig = config
 
-	// Register process metrics collector if required
+	// Register process metrics collector if needed
 	if len(config.ProcessNames) > 0 {
-		if err := m.registerProcessMetricsCollector(config); err != nil {
+		if err := m.RegisterProcessMetricsCollector(config); err != nil {
 			m.logger.Error().Err(err).Msg("Failed to register process metrics collector")
 			return err
 		}
 	}
 
-	// Start the metrics collection loop
+	// Initialize context for running the collection loop
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.wg.Add(1)
-	go m.runMetricsCollectionLoop()
+	go m.RunMetricsCollectionLoop()
 
 	m.logger.Info().Str("topic", m.pubTopic).Msg("MetricsService started successfully")
 	return nil
 }
 
+// Stop gracefully shuts down the MetricsService.
+func (m *MetricsService) Stop() error {
+	if m.ctx == nil {
+		m.logger.Warn().Msg("MetricsService is not running")
+		return errors.New("metrics service is not running")
+	}
+
+	m.logger.Info().Msg("Stopping MetricsService...")
+	m.cancel()
+	m.wg.Wait()
+	m.workerPool.Shutdown()
+	m.logger.Info().Msg("MetricsService stopped successfully")
+	return nil
+}
+
 // loadAndValidateMetricsConfig loads and validates the metrics configuration.
-func (m *MetricsService) loadAndValidateMetricsConfig() (*models.MetricsConfig, error) {
-	config, err := m.loadMetricsConfig()
+func (m *MetricsService) LoadAndValidateMetricsConfig() (*models.MetricsConfig, error) {
+	config, err := m.LoadMetricsConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load metrics config: %w", err)
 	}
 
-	if err := m.validateMetricsConfig(config); err != nil {
+	if err := m.ValidateMetricsConfig(config); err != nil {
 		return nil, fmt.Errorf("invalid metrics config: %w", err)
 	}
 
@@ -126,7 +155,7 @@ func (m *MetricsService) loadAndValidateMetricsConfig() (*models.MetricsConfig, 
 }
 
 // loadMetricsConfig reads and parses the metrics configuration file.
-func (m *MetricsService) loadMetricsConfig() (*models.MetricsConfig, error) {
+func (m *MetricsService) LoadMetricsConfig() (*models.MetricsConfig, error) {
 	data, err := m.fileClient.ReadFileRaw(m.metricsConfigFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -142,7 +171,7 @@ func (m *MetricsService) loadMetricsConfig() (*models.MetricsConfig, error) {
 }
 
 // validateMetricsConfig checks if the provided configuration is valid.
-func (m *MetricsService) validateMetricsConfig(config *models.MetricsConfig) error {
+func (m *MetricsService) ValidateMetricsConfig(config *models.MetricsConfig) error {
 	if !config.MonitorCPU && !config.MonitorMemory && !config.MonitorDisk &&
 		!config.MonitorNetwork && len(config.ProcessNames) == 0 {
 		return errors.New("no metrics enabled in configuration")
@@ -155,43 +184,8 @@ func (m *MetricsService) validateMetricsConfig(config *models.MetricsConfig) err
 	return nil
 }
 
-// registerProcessMetricsCollector filters and registers processes specified in the configuration
-// for metrics collection. It identifies running processes that match the configured names and
-// sets up a ProcessMetricCollector to monitor CPU, memory, and I/O metrics for these processes.
-func (m *MetricsService) registerProcessMetricsCollector(config *models.MetricsConfig) error {
-	procs, err := process.Processes()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve process list: %w", err)
-	}
-
-	requiredProcs := utils.SliceToSet(config.ProcessNames)
-	filteredProcs := make([]*process.Process, 0)
-
-	for _, proc := range procs {
-		name, err := proc.Name()
-		if err != nil {
-			continue
-		}
-		name = strings.ToLower(name)
-		if _, exists := requiredProcs[name]; exists {
-			filteredProcs = append(filteredProcs, proc)
-		}
-	}
-
-	m.registry.Register(&metrics_collectors.ProcessMetricCollector{
-		Logger:         m.logger,
-		ProcessNames:   filteredProcs,
-		MonitorProcCPU: config.MonitorProcCPU,
-		MonitorProcMem: config.MonitorProcMem,
-		MonitorProcIO:  config.MonitorProcIOps,
-		WorkerPool:     m.workerPool,
-	})
-
-	return nil
-}
-
-// runMetricsCollectionLoop runs the main metrics collection and publishing loop.
-func (m *MetricsService) runMetricsCollectionLoop() {
+// runMetricsCollectionLoop collects and publishes metrics at configured intervals.
+func (m *MetricsService) RunMetricsCollectionLoop() {
 	defer m.wg.Done()
 
 	ticker := time.NewTicker(m.interval)
@@ -200,10 +194,10 @@ func (m *MetricsService) runMetricsCollectionLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			metrics := m.collectMetrics()
+			metrics := m.CollectMetrics()
 			metrics.DeviceID = m.deviceInfo.GetDeviceID()
 
-			if err := m.publishMetrics(metrics); err != nil {
+			if err := m.PublishMetrics(metrics); err != nil {
 				m.logger.Error().Err(err).Msg("Failed to publish metrics")
 			}
 		case <-m.ctx.Done():
@@ -214,7 +208,7 @@ func (m *MetricsService) runMetricsCollectionLoop() {
 }
 
 // collectMetrics gathers system and process metrics concurrently.
-func (m *MetricsService) collectMetrics() *models.SystemMetrics {
+func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 	metrics := &models.SystemMetrics{
 		Timestamp: time.Now().UTC(),
 		Metrics:   make(map[string]models.Metric),
@@ -258,8 +252,10 @@ func (m *MetricsService) collectMetrics() *models.SystemMetrics {
 	return metrics
 }
 
-// publishMetrics sends the collected metrics via MQTT.
-func (m *MetricsService) publishMetrics(metrics *models.SystemMetrics) error {
+// publishMetrics add JWT to the message and sends collected metrics via MQTT.
+func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
+	metrics.JWTToken = m.jwtManager.GetJWT()
+
 	metricsData, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to serialize metrics: %w", err)
@@ -279,17 +275,37 @@ func (m *MetricsService) publishMetrics(metrics *models.SystemMetrics) error {
 	return fmt.Errorf("failed to publish metrics after %d retries", retries)
 }
 
-// Stop gracefully stops the metrics service.
-func (m *MetricsService) Stop() error {
-	if m.ctx == nil {
-		m.logger.Warn().Msg("MetricsService is not running")
-		return errors.New("metrics service is not running")
+// registerProcessMetricsCollector filters and registers processes specified in the configuration
+// for metrics collection. It identifies running processes that match the configured names and
+// sets up a ProcessMetricCollector to monitor CPU, memory, and I/O metrics for these processes.
+func (m *MetricsService) RegisterProcessMetricsCollector(config *models.MetricsConfig) error {
+	procs, err := process.Processes()
+	if err != nil {
+		return fmt.Errorf("failed to retrieve process list: %w", err)
 	}
 
-	m.logger.Info().Msg("Stopping MetricsService...")
-	m.cancel()
-	m.wg.Wait()
-	m.workerPool.Shutdown()
-	m.logger.Info().Msg("MetricsService stopped successfully")
+	requiredProcs := utils.SliceToSet(config.ProcessNames)
+	filteredProcs := make([]*process.Process, 0)
+
+	for _, proc := range procs {
+		name, err := proc.Name()
+		if err != nil {
+			continue
+		}
+		name = strings.ToLower(name)
+		if _, exists := requiredProcs[name]; exists {
+			filteredProcs = append(filteredProcs, proc)
+		}
+	}
+
+	m.registry.Register(&metrics_collectors.ProcessMetricCollector{
+		Logger:         m.logger,
+		ProcessNames:   filteredProcs,
+		MonitorProcCPU: config.MonitorProcCPU,
+		MonitorProcMem: config.MonitorProcMem,
+		MonitorProcIO:  config.MonitorProcIOps,
+		WorkerPool:     m.workerPool,
+	})
+
 	return nil
 }

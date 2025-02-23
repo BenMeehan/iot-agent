@@ -95,142 +95,154 @@ func (sr *ServiceRegistry) StopServices() error {
 
 // RegisterServices initializes and registers enabled services based on configuration.
 func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface) error {
-	// Map of service constructors to be dynamically created.
-	serviceConfigs := map[string]func() (Service, error){
-		"registration": func() (Service, error) {
-			return services.NewRegistrationService(
-				config.Services.Registration.Topic,
-				config.MQTT.ClientID,
-				config.Services.Registration.QOS,
-				deviceInfo,
-				sr.mqttClient,
-				sr.fileClient,
-				sr.jwtManager,
-				sr.encryptionManager,
-				config.Services.Registration.MaxBackoffSeconds,
-				sr.Logger,
-			), nil
+	// Ordered service definitions with inline constructors
+	servicesInOrder := []struct {
+		name        string
+		enabled     bool
+		constructor func() (Service, error)
+	}{
+		{
+			name:    "registration",
+			enabled: config.Services.Registration.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewRegistrationService(
+					config.Services.Registration.Topic,
+					config.MQTT.ClientID,
+					config.Services.Registration.QOS,
+					config.Services.Registration.MaxBackoffSeconds,
+					deviceInfo,
+					sr.mqttClient,
+					sr.fileClient,
+					sr.jwtManager,
+					sr.encryptionManager,
+					sr.Logger,
+				), nil
+			},
 		},
-		"heartbeat": func() (Service, error) {
-			return services.NewHeartbeatService(
-				config.Services.Heartbeat.Topic,
-				time.Duration(config.Services.Heartbeat.Interval)*time.Second,
-				deviceInfo,
-				config.Services.Heartbeat.QOS,
-				sr.mqttClient,
-				sr.jwtManager,
-				sr.Logger,
-			), nil
+		{
+			name:    "heartbeat",
+			enabled: config.Services.Heartbeat.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewHeartbeatService(
+					config.Services.Heartbeat.Topic,
+					time.Duration(config.Services.Heartbeat.Interval)*time.Second,
+					config.Services.Heartbeat.QOS,
+					deviceInfo,
+					sr.mqttClient,
+					sr.jwtManager,
+					sr.Logger,
+				), nil
+			},
 		},
-		"metrics": func() (Service, error) {
-			return services.NewMetricsService(
-				config.Services.Metrics.Topic,
-				config.Services.Metrics.MetricsConfigFile,
-				time.Duration(config.Services.Metrics.Interval)*time.Second,
-				time.Duration(config.Services.Metrics.Timeout)*time.Second,
-				deviceInfo,
-				config.Services.Metrics.QOS,
-				sr.mqttClient,
-				sr.fileClient,
-				sr.Logger,
-			), nil
+		{
+			name:    "metrics",
+			enabled: config.Services.Metrics.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewMetricsService(
+					config.Services.Metrics.Topic,
+					config.Services.Metrics.MetricsConfigFile,
+					time.Duration(config.Services.Metrics.Interval)*time.Second,
+					time.Duration(config.Services.Metrics.Timeout)*time.Second,
+					deviceInfo,
+					config.Services.Metrics.QOS,
+					sr.mqttClient,
+					sr.fileClient,
+					sr.jwtManager,
+					sr.Logger,
+				), nil
+			},
 		},
-		"command": func() (Service, error) {
-			return services.NewCommandService(
-				config.Services.Command.Topic,
-				deviceInfo,
-				config.Services.Command.QOS,
-				sr.mqttClient,
-				sr.Logger,
-				config.Services.Command.OutputSizeLimit,
-				config.Services.Command.MaxExecutionTime,
-			), nil
+		{
+			name:    "command",
+			enabled: config.Services.Command.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewCommandService(
+					config.Services.Command.Topic,
+					deviceInfo,
+					config.Services.Command.QOS,
+					sr.mqttClient,
+					sr.Logger,
+					config.Services.Command.OutputSizeLimit,
+					config.Services.Command.MaxExecutionTime,
+				), nil
+			},
 		},
-		"ssh": func() (Service, error) {
-			return services.NewSSHService(
-				config.Services.SSH.Topic,
-				deviceInfo,
-				sr.mqttClient,
-				sr.Logger,
-				config.Services.SSH.BackendHost,
-				config.Services.SSH.BackendPort,
-				config.Services.SSH.SSHUser,
-				config.Services.SSH.PrivateKeyPath,
-				sr.fileClient,
-				config.Services.SSH.QOS,
-			), nil
+		{
+			name:    "ssh",
+			enabled: config.Services.SSH.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewSSHService(
+					config.Services.SSH.Topic,
+					deviceInfo,
+					sr.mqttClient,
+					sr.Logger,
+					config.Services.SSH.BackendHost,
+					config.Services.SSH.BackendPort,
+					config.Services.SSH.SSHUser,
+					config.Services.SSH.PrivateKeyPath,
+					sr.fileClient,
+					config.Services.SSH.QOS,
+				), nil
+			},
 		},
-		"location": func() (Service, error) {
-			var provider location.Provider
-			var err error
-
-			if config.Services.Location.SensorBased {
-				provider, err = location.NewGoogleGeolocationProvider(config.Services.Location.MapsAPIKey)
-				if err != nil {
-					sr.Logger.Error().Err(err).Msg("failed to create Google Geolocation provider")
-					return nil, err
+		{
+			name:    "location",
+			enabled: config.Services.Location.Enabled,
+			constructor: func() (Service, error) {
+				var provider location.Provider
+				var err error
+				if config.Services.Location.SensorBased {
+					provider, err = location.NewGoogleGeolocationProvider(config.Services.Location.MapsAPIKey)
+					if err != nil {
+						sr.Logger.Error().Err(err).Msg("failed to create Google Geolocation provider")
+						return nil, err
+					}
+				} else {
+					provider = location.NewDeviceSensorProvider(config.Services.Location.GPSDevicePort, config.Services.Location.GPSDeviceBaudRate)
 				}
-			} else {
-				provider = location.NewDeviceSensorProvider(config.Services.Location.GPSDevicePort, config.Services.Location.GPSDeviceBaudRate)
-			}
-
-			return services.NewLocationService(
-				config.Services.Location.Topic,
-				time.Duration(config.Services.Location.Interval),
-				deviceInfo,
-				config.Services.Location.Interval,
-				sr.mqttClient,
-				sr.Logger,
-				provider,
-			), nil
+				return services.NewLocationService(
+					config.Services.Location.Topic,
+					time.Duration(config.Services.Location.Interval),
+					deviceInfo,
+					config.Services.Location.Interval,
+					sr.mqttClient,
+					sr.Logger,
+					provider,
+				), nil
+			},
 		},
-		"update": func() (Service, error) {
-			return services.NewUpdateService(
-				config.Services.Update.Topic,
-				deviceInfo,
-				config.Services.Update.QOS,
-				sr.mqttClient,
-				sr.fileClient,
-				sr.Logger,
-				config.Services.Update.StateFile,
-				config.Services.Update.UpdateFilePath,
-			), nil
+		{
+			name:    "update",
+			enabled: config.Services.Update.Enabled,
+			constructor: func() (Service, error) {
+				return services.NewUpdateService(
+					config.Services.Update.Topic,
+					deviceInfo,
+					config.Services.Update.QOS,
+					sr.mqttClient,
+					sr.fileClient,
+					sr.Logger,
+					config.Services.Update.StateFile,
+					config.Services.Update.UpdateFilePath,
+				), nil
+			},
 		},
 	}
 
+	// Register services in the predefined order
 	registeredServices := []string{}
-	for name, createService := range serviceConfigs {
-		if isEnabled(name, config) {
-			svc, err := createService()
+	for _, svc := range servicesInOrder {
+		if svc.enabled {
+			serviceInstance, err := svc.constructor()
 			if err != nil {
+				sr.Logger.Error().Err(err).Msgf("Failed to create %s service", svc.name)
 				return err
 			}
-			sr.RegisterService(name, svc)
-			registeredServices = append(registeredServices, name)
+			sr.RegisterService(svc.name, serviceInstance)
+			registeredServices = append(registeredServices, svc.name)
 		}
 	}
-	sr.Logger.Info().Msgf("Registered services: %v", registeredServices)
-	return nil
-}
 
-// isEnabled checks if a given service is enabled in the configuration.
-func isEnabled(name string, config *utils.Config) bool {
-	switch name {
-	case "registration":
-		return config.Services.Registration.Enabled
-	case "heartbeat":
-		return config.Services.Heartbeat.Enabled
-	case "metrics":
-		return config.Services.Metrics.Enabled
-	case "command":
-		return config.Services.Command.Enabled
-	case "ssh":
-		return config.Services.SSH.Enabled
-	case "location":
-		return config.Services.Location.Enabled
-	case "update":
-		return config.Services.Update.Enabled
-	default:
-		return false
-	}
+	sr.Logger.Info().Msgf("Registered services in order: %v", registeredServices)
+	return nil
 }

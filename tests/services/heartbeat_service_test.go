@@ -30,15 +30,7 @@ func TestHeartbeatService_Start(t *testing.T) {
 	mockMqttClient.On("Publish", "heartbeat/topic", byte(1), false, mock.Anything).Return(mockMqttToken)
 
 	// Create HeartbeatService instance
-	service := &services.HeartbeatService{
-		PubTopic:   "heartbeat/topic",
-		Interval:   1 * time.Second,
-		DeviceInfo: mockDeviceInfo,
-		QOS:        1,
-		MqttClient: mockMqttClient,
-		JWTManager: mockJWTManager,
-		Logger:     logger,
-	}
+	service := services.NewHeartbeatService("heartbeat/topic", 1*time.Second, 1, mockDeviceInfo, mockMqttClient, mockJWTManager, logger)
 
 	// Start the service
 	err := service.Start()

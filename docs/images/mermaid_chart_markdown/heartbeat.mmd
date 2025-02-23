@@ -1,0 +1,23 @@
+graph TD;
+    A[Start Heartbeat Service] -->|Check if Running| B{Already Running?};
+
+    B -- Yes --> C[Log Warning & Exit];
+    B -- No --> D[Initialize Context & Start Loop];
+
+    subgraph Heartbeat Loop
+        D --> E[Create Heartbeat Message];
+        E --> F[Serialize Message to JSON];
+
+        F -- Success --> G[Publish to MQTT Topic];
+        F -- Failure --> H[Log Serialization Error];
+
+        G -- Success --> I[Log Heartbeat Sent];
+        G -- Failure --> J[Log Publish Error];
+
+        I --> K[Wait for Next Interval];
+        H --> K;
+        J --> K;
+
+        K -->|Continue Loop| E;
+    end
+    K -->|Stop Signal Received| L[Cleanup & Exit];

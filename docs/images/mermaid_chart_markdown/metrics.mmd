@@ -1,0 +1,35 @@
+graph TD;
+    A[Start Metrics Service] -->|Check if Running| B{Already Running?};
+
+    B -- Yes --> C[Log Warning & Exit];
+    B -- No --> D[Load & Validate Metrics Config];
+
+    D -- Failure --> E[Log Config Error & Exit];
+    D -- Success --> F[Register Default Collectors];
+
+    F --> G{Process Monitoring Enabled?};
+    G -- Yes --> H[Register Process Metrics Collector];
+    G -- No --> J[Initialize Context & Start Collection Loop];
+
+    H --> J;
+
+    subgraph Metrics Collection Loop
+        J --> K[Wait for Next Interval];
+
+        K --> L[Collect System & Process Metrics];
+        L --> M{Metrics Collected?};
+
+        M -- No --> N[Log Collection Failure];
+        M -- Yes --> O[Add Device ID & JWT Token];
+
+        O --> P[Publish Metrics via MQTT];
+        P -- Success --> Q[Log Metrics Sent];
+        P -- Failure --> R[Log Publish Error & Retry];
+
+        Q --> S[Wait for Next Cycle];
+        R --> S;
+        N --> S;
+
+        S -->|Continue Loop| K;
+    end
+    S -->|Stop Signal Received| T[Cleanup & Exit];
