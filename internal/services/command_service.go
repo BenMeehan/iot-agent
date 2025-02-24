@@ -8,116 +8,145 @@ import (
 	"sync"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 )
 
-// CommandService defines the structure and functionality of the command service
+// CommandService manages execution of shell commands received via MQTT
+// and publishes the results back to a response topic.
 type CommandService struct {
-	SubTopic         string
-	DeviceInfo       identity.DeviceInfoInterface
-	QOS              int
-	MqttClient       mqtt.MQTTClient
-	Logger           zerolog.Logger
-	OutputSizeLimit  int
-	MaxExecutionTime int
-	stopChan         chan struct{}
-	wg               sync.WaitGroup
+	// Configuration Fields
+	subTopic         string
+	qos              int
+	outputSizeLimit  int
+	maxExecutionTime int
+
+	// Dependencies
+	mqttClient mqtt.MQTTClient
+	deviceInfo identity.DeviceInfoInterface
+	logger     zerolog.Logger
+
+	// Internal state management
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	mu       sync.Mutex
+
+	// Context for cancellation
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-// NewCommandService initializes a new CommandService
-func NewCommandService(subTopic string, deviceInfo identity.DeviceInfoInterface, qos int, mqttClient mqtt.MQTTClient, logger zerolog.Logger, outputSizeLimit, maxExecutionTime int) *CommandService {
+// NewCommandService initializes a new CommandService with given parameters.
+func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime int, mqttClient mqtt.MQTTClient, deviceInfo identity.DeviceInfoInterface, logger zerolog.Logger) *CommandService {
+	if outputSizeLimit == 0 {
+		outputSizeLimit = constants.DefaultOutputSizeLimit
+	}
+	if maxExecutionTime == 0 {
+		maxExecutionTime = constants.DefaultMaxExecutionTime
+	}
+
+	// Initialize context and cancel function
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &CommandService{
-		SubTopic:         subTopic,
-		DeviceInfo:       deviceInfo,
-		QOS:              qos,
-		MqttClient:       mqttClient,
-		Logger:           logger,
-		OutputSizeLimit:  outputSizeLimit,
-		MaxExecutionTime: maxExecutionTime,
+		subTopic:         subTopic,
+		deviceInfo:       deviceInfo,
+		qos:              qos,
+		mqttClient:       mqttClient,
+		logger:           logger,
+		outputSizeLimit:  outputSizeLimit,
+		maxExecutionTime: maxExecutionTime,
 		stopChan:         make(chan struct{}),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 }
 
-// Start initializes the command subscription and starts listening for incoming commands
+// Start subscribes to the MQTT topic and listens for incoming commands.
 func (cs *CommandService) Start() error {
-	topic := cs.SubTopic + "/" + cs.DeviceInfo.GetDeviceID()
-	cs.Logger.Info().Str("topic", topic).Msg("Starting CommandService and subscribing")
-
-	token := cs.MqttClient.Subscribe(topic, byte(cs.QOS), cs.handleCommand)
+	topic := cs.subTopic + "/" + cs.deviceInfo.GetDeviceID()
+	cs.logger.Info().Str("topic", topic).Msg("Starting CommandService and subscribing to MQTT topic")
+	token := cs.mqttClient.Subscribe(topic, byte(cs.qos), cs.HandleCommand)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		cs.Logger.Error().Err(err).Str("topic", topic).Msg("Failed to subscribe")
+		cs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to subscribe to MQTT topic")
 		return err
 	}
 
-	cs.Logger.Info().Str("topic", topic).Msg("Subscribed successfully")
+	cs.logger.Info().Str("topic", topic).Msg("Successfully subscribed to MQTT topic")
 	return nil
 }
 
-// Stop unsubscribes from MQTT topic and stops the service gracefully
+// Stop gracefully shuts down the service, unsubscribing from MQTT and waiting for ongoing commands to finish.
 func (cs *CommandService) Stop() error {
+	cs.cancel() // Cancel the context to signal all goroutines to stop
 	close(cs.stopChan)
-	cs.wg.Wait() // Wait for any running commands to finish
+	cs.wg.Wait() // Wait for all running commands to complete before proceeding
 
-	topic := cs.SubTopic + "/" + cs.DeviceInfo.GetDeviceID()
-	cs.Logger.Info().Str("topic", topic).Msg("Unsubscribing from topic")
-
-	token := cs.MqttClient.Unsubscribe(topic)
+	topic := cs.subTopic + "/" + cs.deviceInfo.GetDeviceID()
+	token := cs.mqttClient.Unsubscribe(topic)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		cs.Logger.Error().Err(err).Str("topic", topic).Msg("Failed to unsubscribe")
+		cs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to unsubscribe from MQTT topic")
 		return err
 	}
 
-	cs.Logger.Info().Str("topic", topic).Msg("Successfully unsubscribed")
+	cs.logger.Info().Msg("CommandService stopped successfully")
 	return nil
 }
 
-// handleCommand processes incoming commands, executes them, and publishes the output
-func (cs *CommandService) handleCommand(client MQTT.Client, msg MQTT.Message) {
+// HandleCommand processes incoming commands, executes them, and publishes the output.
+func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
+	cs.mu.Lock()
+
 	select {
 	case <-cs.stopChan:
-		cs.Logger.Warn().Msg("Received command but service is stopping")
+		cs.mu.Unlock()
+		cs.logger.Warn().Msg("Received command but service is stopping, ignoring command")
 		return
 	default:
+		cs.wg.Add(1)
+		cs.mu.Unlock()
 	}
 
-	cs.wg.Add(1)
 	defer cs.wg.Done()
 
 	topic := msg.Topic()
-	payload := msg.Payload()
+	payload := string(msg.Payload())
 
-	cs.Logger.Info().Str("topic", topic).Str("command", string(payload)).Msg("Received command")
+	cs.logger.Info().Str("topic", topic).Str("command", payload).Msg("Received command from MQTT topic")
 
-	output, err := cs.executeCommand(string(payload))
+	output, err := cs.ExecuteCommand(cs.ctx, payload)
 	if err != nil {
-		cs.Logger.Error().Err(err).Msg("Failed to execute command")
+		cs.logger.Error().Err(err).Msg("Command execution failed")
 		output = fmt.Sprintf("Error executing command: %v", err)
 	}
 
-	// Limit output size
-	if len(output) > cs.OutputSizeLimit {
-		output = output[:cs.OutputSizeLimit] + "... (truncated)"
-		cs.Logger.Warn().Int("limit", cs.OutputSizeLimit).Msg("Output truncated")
+	// Truncate output if it exceeds the defined limit
+	if len(output) > cs.outputSizeLimit {
+		output = output[:cs.outputSizeLimit] + "... (truncated)"
+		cs.logger.Warn().Int("limit", cs.outputSizeLimit).Msg("Command output truncated due to size limit")
 	}
 
-	if err := cs.publishOutput(output); err != nil {
-		cs.Logger.Error().Err(err).Msg("Failed to publish command output")
+	if err := cs.PublishOutput(cs.ctx, output); err != nil {
+		cs.logger.Error().Err(err).Msg("Failed to publish command output")
 	}
 }
 
-// executeCommand runs the command on the system and returns its output or error
-func (cs *CommandService) executeCommand(cmd string) (string, error) {
-	cs.Logger.Info().Str("command", cmd).Msg("Executing command")
+// ExecuteCommand runs the given shell command and returns its output or an error.
+func (cs *CommandService) ExecuteCommand(ctx context.Context, cmd string) (string, error) {
+	cs.logger.Debug().Str("command", cmd).Msg("Executing shell command")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cs.MaxExecutionTime)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(cs.maxExecutionTime)*time.Second)
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
+	stdout.Grow(cs.outputSizeLimit)
+	stderr.Grow(cs.outputSizeLimit)
+
 	command := exec.CommandContext(ctx, "/bin/sh", "-c", cmd)
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -125,29 +154,33 @@ func (cs *CommandService) executeCommand(cmd string) (string, error) {
 	err := command.Run()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			cs.Logger.Error().Msg("Command execution timed out")
+			cs.logger.Error().Msg("Command execution timed out")
 			return "", ctx.Err()
 		}
-		cs.Logger.Error().Err(err).Msg("Command execution failed")
+		cs.logger.Error().Err(err).Msg("Command execution failed")
 		return stderr.String(), err
 	}
 
 	return stdout.String(), nil
 }
 
-// publishOutput sends the command output to the MQTT topic
-func (cs *CommandService) publishOutput(output string) error {
-	topic := cs.SubTopic + "/response/" + cs.DeviceInfo.GetDeviceID()
-	cs.Logger.Info().Str("topic", topic).Msg("Publishing output")
+// PublishOutput sends the command execution result to an MQTT response topic.
+func (cs *CommandService) PublishOutput(ctx context.Context, output string) error {
+	topic := fmt.Sprintf("%s/%s/response", cs.subTopic, cs.deviceInfo.GetDeviceID())
+	cs.logger.Info().Str("topic", topic).Msg("Publishing command output to MQTT topic")
 
-	token := cs.MqttClient.Publish(topic, byte(cs.QOS), false, []byte(output))
-
-	token.Wait()
-	if err := token.Error(); err != nil {
-		cs.Logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish output")
-		return err
+	token := cs.mqttClient.Publish(topic, byte(cs.qos), false, []byte(output))
+	select {
+	case <-token.Done():
+		if err := token.Error(); err != nil {
+			cs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish command output")
+			return err
+		}
+	case <-ctx.Done():
+		cs.logger.Warn().Str("topic", topic).Msg("Publish operation cancelled")
+		return ctx.Err()
 	}
 
-	cs.Logger.Info().Str("topic", topic).Msg("Output published successfully")
+	cs.logger.Info().Str("topic", topic).Msg("Command output published successfully")
 	return nil
 }

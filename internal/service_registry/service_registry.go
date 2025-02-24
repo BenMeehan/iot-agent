@@ -158,12 +158,12 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				return services.NewCommandService(
 					config.Services.Command.Topic,
-					deviceInfo,
 					config.Services.Command.QOS,
-					sr.mqttClient,
-					sr.Logger,
 					config.Services.Command.OutputSizeLimit,
 					config.Services.Command.MaxExecutionTime,
+					sr.mqttClient,
+					deviceInfo,
+					sr.Logger,
 				), nil
 			},
 		},

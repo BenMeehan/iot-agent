@@ -239,6 +239,14 @@ func (rs *RegistrationService) Stop() error {
 	rs.ctx = nil
 	rs.cancel = nil
 
+	topic := fmt.Sprintf("%s/response/%s", rs.pubTopic, rs.deviceInfo.GetDeviceID())
+	token := rs.mqttClient.Unsubscribe(topic)
+	token.Wait()
+	if err := token.Error(); err != nil {
+		rs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to unsubscribe from MQTT topic")
+		return err
+	}
+
 	rs.logger.Info().Msg("RegistrationService stopped successfully")
 	return nil
 }
