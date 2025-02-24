@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
-	"github.com/shirou/gopsutil/process"
 )
 
 // MetricsService collects and publishes system telemetry data via MQTT.
@@ -110,7 +108,7 @@ func (m *MetricsService) Start() error {
 
 	// Register process metrics collector if needed
 	if len(config.ProcessNames) > 0 {
-		if err := m.RegisterProcessMetricsCollector(config); err != nil {
+		if err := m.registerProcessMetricsCollector(config); err != nil {
 			m.logger.Error().Err(err).Msg("Failed to register process metrics collector")
 			return err
 		}
@@ -274,36 +272,20 @@ func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
 	return fmt.Errorf("failed to publish metrics after %d retries", retries)
 }
 
-// registerProcessMetricsCollector filters and registers processes specified in the configuration
-// for metrics collection. It identifies running processes that match the configured names and
-// sets up a ProcessMetricCollector to monitor CPU, memory, and I/O metrics for these processes.
-func (m *MetricsService) RegisterProcessMetricsCollector(config *models.MetricsConfig) error {
-	procs, err := process.Processes()
-	if err != nil {
-		return fmt.Errorf("failed to retrieve process list: %w", err)
-	}
-
-	requiredProcs := utils.SliceToSet(config.ProcessNames)
-	filteredProcs := make([]*process.Process, 0)
-
-	for _, proc := range procs {
-		name, err := proc.Name()
-		if err != nil {
-			continue
-		}
-		name = strings.ToLower(name)
-		if _, exists := requiredProcs[name]; exists {
-			filteredProcs = append(filteredProcs, proc)
-		}
+// registerProcessMetricsCollector filters and registers processes specified in the configuration.
+func (m *MetricsService) registerProcessMetricsCollector(config *models.MetricsConfig) error {
+	targetNames := make(map[string]struct{})
+	for _, name := range config.ProcessNames {
+		targetNames[name] = struct{}{}
 	}
 
 	m.registry.Register(&metrics_collectors.ProcessMetricCollector{
-		Logger:         m.logger,
-		ProcessNames:   filteredProcs,
-		MonitorProcCPU: config.MonitorProcCPU,
-		MonitorProcMem: config.MonitorProcMem,
-		MonitorProcIO:  config.MonitorProcIOps,
-		WorkerPool:     m.workerPool,
+		Logger:             m.logger,
+		TargetProcessNames: targetNames,
+		MonitorProcCPU:     config.MonitorProcCPU,
+		MonitorProcMem:     config.MonitorProcMem,
+		MonitorProcIO:      config.MonitorProcIOps,
+		WorkerPool:         m.workerPool,
 	})
 
 	return nil

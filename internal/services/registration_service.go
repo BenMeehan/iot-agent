@@ -41,7 +41,6 @@ type RegistrationService struct {
 	// Internal state management
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
 	mu     sync.Mutex
 }
 
@@ -85,18 +84,18 @@ func (rs *RegistrationService) Start() error {
 
 	rs.ctx, rs.cancel = context.WithCancel(context.Background())
 
-	rs.wg.Add(1)
-	go func() {
-		defer rs.wg.Done()
-		rs.run()
-	}()
-
 	rs.logger.Info().Str("client_id", rs.clientID).Msg("Starting registration process")
+
+	err := rs.run()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // run manages the core registration logic, including JWT validation and conditional re-registration.
-func (rs *RegistrationService) run() {
+func (rs *RegistrationService) run() error {
 	existingDeviceID := rs.deviceInfo.GetDeviceID()
 	if existingDeviceID != "" {
 		rs.logger.Info().Str("device_id", existingDeviceID).Msg("Found existing device ID")
@@ -104,18 +103,22 @@ func (rs *RegistrationService) run() {
 		valid, err := rs.jwtManager.IsJWTValid()
 		if err != nil {
 			rs.logger.Error().Err(err).Msg("Failed to check JWT token validity")
-			return
+			return err
 		}
 
 		if !valid {
 			rs.logger.Warn().Msg("JWT token is invalid, attempting re-registration")
 			payload := models.RegistrationPayload{DeviceID: existingDeviceID}
-			_ = rs.RetryRegistration(payload)
-			return
+			err = rs.RetryRegistration(payload)
+			if err != nil {
+				rs.logger.Error().Err(err).Msg("Failed to re-register device")
+				return err
+			}
+			return nil
 		}
 
 		rs.logger.Info().Msg("Device is already registered and JWT is valid")
-		return
+		return nil
 	}
 
 	payload := models.RegistrationPayload{
@@ -126,6 +129,7 @@ func (rs *RegistrationService) run() {
 	}
 
 	_ = rs.RetryRegistration(payload)
+	return nil
 }
 
 // RetryRegistration attempts device registration with exponential backoff and jitter.
@@ -231,7 +235,6 @@ func (rs *RegistrationService) Stop() error {
 	}
 
 	rs.cancel()
-	rs.wg.Wait()
 
 	rs.ctx = nil
 	rs.cancel = nil

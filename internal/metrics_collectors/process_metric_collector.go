@@ -12,12 +12,12 @@ import (
 
 // ProcessMetricCollector collects CPU, memory, and I/O metrics for specified processes.
 type ProcessMetricCollector struct {
-	Logger         zerolog.Logger
-	ProcessNames   []*process.Process
-	MonitorProcCPU bool
-	MonitorProcMem bool
-	MonitorProcIO  bool
-	WorkerPool     *utils.WorkerPool
+	Logger             zerolog.Logger
+	TargetProcessNames map[string]struct{}
+	MonitorProcCPU     bool
+	MonitorProcMem     bool
+	MonitorProcIO      bool
+	WorkerPool         *utils.WorkerPool
 }
 
 // Name returns the collector's identifier.
@@ -29,37 +29,47 @@ func (p *ProcessMetricCollector) Name() string {
 func (p *ProcessMetricCollector) Collect(ctx context.Context) interface{} {
 	p.logDisabledMetrics()
 
+	// Retrieve all running processes
+	allProcs, err := process.Processes()
+	if err != nil {
+		p.Logger.Error().Err(err).Msg("Failed to list processes")
+		return nil
+	}
+
 	processMetrics := make([]*models.ProcessMetrics, 0)
 	var wg sync.WaitGroup
 	var metricsMutex sync.Mutex
 
 	// Collect metrics for each process concurrently.
-	for _, proc := range p.ProcessNames {
-		wg.Add(1)
-		p.WorkerPool.Submit(func(proc *process.Process) func() {
-			return func() {
-				defer wg.Done()
+	for _, proc := range allProcs {
+		name, err := proc.Name()
+		if err != nil {
+			p.Logger.Debug().Err(err).Int32("pid", proc.Pid).Msg("Skipping process due to name error")
+			continue
+		}
 
-				name, err := proc.Name()
-				if err != nil {
-					p.Logger.Warn().Err(err).Msg("Failed to fetch process name")
-					return
+		// Check if the process is a target
+		if _, ok := p.TargetProcessNames[name]; ok {
+			wg.Add(1)
+			p.WorkerPool.Submit(func(proc *process.Process) func() {
+				return func() {
+					defer wg.Done()
+					metrics := p.collectProcessMetrics(proc, name)
+					if metrics != nil {
+						metricsMutex.Lock()
+						processMetrics = append(processMetrics, metrics)
+						metricsMutex.Unlock()
+					}
 				}
-
-				// Collect and store metrics for the process.
-				metrics := p.collectProcessMetrics(proc, name)
-				metricsMutex.Lock()
-				processMetrics = append(processMetrics, metrics)
-				metricsMutex.Unlock()
-			}
-		}(proc))
+			}(proc))
+		}
 	}
 
 	wg.Wait()
 
 	// Log a warning if no metrics were collected.
 	if len(processMetrics) == 0 {
-		p.Logger.Warn().Msg("No process metrics collected. Ensure specified processes are running and accessible.")
+		p.Logger.Debug().Msg("No process metrics collected. Ensure specified processes are running and accessible.")
 	} else {
 		p.Logger.Debug().Msg("Process metrics collection completed successfully")
 	}

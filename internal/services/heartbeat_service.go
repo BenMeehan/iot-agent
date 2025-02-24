@@ -117,7 +117,7 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 			}
 
 		case <-h.ctx.Done():
-			h.logger.Info().Msg("HeartbeatService stopping gracefully")
+			h.logger.Info().Msg("Stopping heartbeats...")
 			return
 		}
 	}
