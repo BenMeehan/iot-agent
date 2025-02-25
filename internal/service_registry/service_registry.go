@@ -163,6 +163,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Command.MaxExecutionTime,
 					sr.mqttClient,
 					deviceInfo,
+					sr.encryptionManager,
+					sr.jwtManager,
 					sr.Logger,
 				), nil
 			},

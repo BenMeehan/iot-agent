@@ -15,7 +15,7 @@ services:
     topic: "iot-registration"
     qos: 2
     max_backoff_seconds: 60
-    enabled: false
+    enabled: true
   heartbeat:
     topic: "iot-heartbeat"
     interval: 10
@@ -29,7 +29,7 @@ services:
     qos: 1
     enabled: false
   command:
-    topic: "iot-command"
+    topic: "iot-commands"
     qos: 2
     output_size_limit: 1024  
     max_execution_time: 10 
