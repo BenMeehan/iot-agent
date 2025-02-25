@@ -158,7 +158,7 @@ func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
 
 	cmdResponse := &models.CmdResponse{
 		UserID:   request.UserID,
-		DeviceID: request.DeviceID,
+		DeviceID: cs.deviceInfo.GetDeviceID(),
 		Response: base64.StdEncoding.EncodeToString(encryptedOutput),
 		JWTToken: cs.jwtManager.GetJWT(),
 	}
