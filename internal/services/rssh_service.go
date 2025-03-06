@@ -1,123 +1,225 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
-	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/ssh"
 )
 
-// SSHService handles reverse SSH tunneling
+// SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
-	SubTopic        string
-	DeviceInfo      identity.DeviceInfoInterface
-	MqttClient      mqtt.MQTTClient
-	Logger          zerolog.Logger
-	BackendHost     string
-	BackendPort     int
-	SSHUser         string
-	PrivateKeyPath  string
-	FileClient      file.FileOperations
-	QOS             int
-	listeners       map[int]net.Listener
-	clientPool      cmap.ConcurrentMap[string, *ssh.Client]
-	clientListeners cmap.ConcurrentMap[string, int]
-	stopChan        chan struct{}
+	// Dependencies
+	DeviceInfo identity.DeviceInfoInterface
+	MqttClient mqtt.MQTTClient
+	FileClient file.FileOperations
+	Logger     zerolog.Logger
+
+	// Configuration
+	SubTopic       string
+	BackendHost    string
+	BackendPort    int
+	SSHUser        string
+	PrivateKeyPath string
+	QOS            int
+
+	// Internal state
+	ctx              context.Context
+	cancel           context.CancelFunc
+	cachedPrivateKey ssh.Signer
+	activeConns      int32
+	clientPool       map[string]models.SSHClientWrapper
+	clientPoolMutex  sync.RWMutex
+	listeners        map[int]net.Listener
+	listenersMutex   sync.RWMutex
+	wg               sync.WaitGroup
+
+	// Configuration
+	MaxListeners      int
+	MaxSSHConnections int
+	ConnectionTimeout time.Duration
+	ForwardTimeout    time.Duration
+	AutoDisconnect    time.Duration
 }
 
-// NewSSHService creates and returns a new instance of SSHService.
+// ---- Initialization ----
+
+// NewSSHService initializes a new SSHService instance.
 func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
 	logger zerolog.Logger, backendHost string, backendPort int, sshUser string, privateKeyPath string,
-	fileClient file.FileOperations, qos int) *SSHService {
+	fileClient file.FileOperations, qos int, maxListeners, maxSSHConnections int,
+	connectionTimeout, forwardTimeout, autoDisconnect time.Duration) *SSHService {
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	if maxListeners == 0 {
+		maxListeners = constants.MaxListeners
+	}
+	if maxSSHConnections == 0 {
+		maxSSHConnections = constants.MaxSSHConnections
+	}
+	if connectionTimeout == 0 {
+		connectionTimeout = constants.ConnectionTimeout
+	}
+	if forwardTimeout == 0 {
+		forwardTimeout = constants.ForwardTimeout
+	}
+	if autoDisconnect == 0 {
+		autoDisconnect = constants.AutoDisconnect
+	}
 
 	return &SSHService{
-		SubTopic:        subTopic,
-		DeviceInfo:      deviceInfo,
-		MqttClient:      mqttClient,
-		Logger:          logger,
-		BackendHost:     backendHost,
-		BackendPort:     backendPort,
-		SSHUser:         sshUser,
-		PrivateKeyPath:  privateKeyPath,
-		FileClient:      fileClient,
-		QOS:             qos,
-		listeners:       make(map[int]net.Listener),
-		clientPool:      cmap.New[*ssh.Client](),
-		clientListeners: cmap.New[int](),
-		stopChan:        make(chan struct{}),
+		SubTopic:          subTopic,
+		DeviceInfo:        deviceInfo,
+		MqttClient:        mqttClient,
+		Logger:            logger,
+		BackendHost:       backendHost,
+		BackendPort:       backendPort,
+		SSHUser:           sshUser,
+		PrivateKeyPath:    privateKeyPath,
+		FileClient:        fileClient,
+		QOS:               qos,
+		ctx:               ctx,
+		cancel:            cancel,
+		clientPool:        make(map[string]models.SSHClientWrapper),
+		listeners:         make(map[int]net.Listener),
+		MaxListeners:      maxListeners,
+		MaxSSHConnections: maxSSHConnections,
+		ConnectionTimeout: connectionTimeout,
+		ForwardTimeout:    forwardTimeout,
+		AutoDisconnect:    autoDisconnect,
 	}
 }
 
-// Start subscribes to MQTT topics and listens for SSH requests
+// ---- Service Lifecycle ----
+
+// Start initializes the SSH service and subscribes to MQTT topics.
 func (s *SSHService) Start() error {
 	s.Logger.Info().Msg("Starting SSH service...")
 
+	// Load SSH private key
+	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read SSH private key: %w", err)
+	}
+
+	privateKey, err := ssh.ParsePrivateKey([]byte(key))
+	if err != nil {
+		return fmt.Errorf("failed to parse SSH private key: %w", err)
+	}
+	s.cachedPrivateKey = privateKey
+
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
+
 	if err := s.subscribeToTopic(topic); err != nil {
 		return err
 	}
 
-	s.listeners = make(map[int]net.Listener)
-	s.clientPool = cmap.New[*ssh.Client]()
-	s.clientListeners = cmap.New[int]()
-	s.stopChan = make(chan struct{})
-
+	go s.cleanupExpiredConnections()
 	return nil
 }
 
-// Stop gracefully shuts down the SSH service
+// Stop gracefully shuts down the SSH service.
 func (s *SSHService) Stop() error {
 	s.Logger.Info().Msg("Stopping SSH service...")
+	s.cancel()
+
+	// Wait for all goroutines to finish
+	s.wg.Wait()
 
 	// Close all active SSH connections
-	s.clientPool.IterCb(func(key string, client *ssh.Client) {
-		s.Logger.Info().Str("backend_host", key).Msg("Closing SSH connection")
-		err := client.Close()
-		if err != nil {
-			s.Logger.Error().Err(err).Msg("Failed to close SSH connection")
-		}
-		s.clientPool.Remove(key)
-	})
+	s.clientPoolMutex.Lock()
+	for _, wrapper := range s.clientPool {
+		wrapper.Client.Close()
+	}
+	s.clientPool = make(map[string]models.SSHClientWrapper)
+	s.clientPoolMutex.Unlock()
 
 	// Close all active listeners
-	for port, listener := range s.listeners {
-		s.Logger.Info().Int("port", port).Msg("Closing SSH listener")
-		err := listener.Close()
-		if err != nil {
-			s.Logger.Error().Err(err).Msg("Failed to close listener")
-			return err
-		}
-		delete(s.listeners, port)
+	s.listenersMutex.Lock()
+	for _, listener := range s.listeners {
+		listener.Close()
 	}
+	s.listeners = make(map[int]net.Listener)
+	s.listenersMutex.Unlock()
 
 	// Unsubscribe from MQTT topic
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
-	s.Logger.Info().Str("topic", topic).Msg("Unsubscribing from MQTT topic")
-	token := s.MqttClient.Unsubscribe(topic)
-	token.Wait()
+	s.MqttClient.Unsubscribe(topic).Wait()
 
-	if err := token.Error(); err != nil {
-		s.Logger.Error().Err(err).Msg("Failed to unsubscribe from MQTT topic")
-		return err
-	}
-
-	// Close stop channel
-	close(s.stopChan)
-	s.Logger.Info().Msg("SSH service stopped")
+	s.Logger.Info().Msg("SSH service stopped.")
 	return nil
 }
 
-// subscribeToTopic subscribes to the MQTT topic for SSH requests
+// ---- Connection Management ----
+
+// cleanupExpiredConnections periodically removes stale SSH connections.
+func (s *SSHService) cleanupExpiredConnections() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.clientPoolMutex.Lock()
+			for backendHost, wrapper := range s.clientPool {
+				if now.Sub(wrapper.StartTime) > s.AutoDisconnect {
+					s.Logger.Info().Str("backend", backendHost).Msg("Auto-disconnecting stale SSH connection")
+					wrapper.Client.Close()
+					delete(s.clientPool, backendHost)
+				}
+			}
+			s.clientPoolMutex.Unlock()
+		}
+	}
+}
+
+// monitorSSHConnection checks the health of the SSH connection.
+func (s *SSHService) monitorSSHConnection(backendHost string, client *ssh.Client) {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+			if err != nil {
+				s.Logger.Warn().Str("backend", backendHost).Msg("SSH connection lost")
+				s.clientPoolMutex.Lock()
+				delete(s.clientPool, backendHost)
+				s.clientPoolMutex.Unlock()
+				client.Close()
+				atomic.AddInt32(&s.activeConns, -1)
+				return
+			}
+		}
+	}
+}
+
+// ---- MQTT Handling ----
+
+// subscribeToTopic subscribes to the MQTT topic for SSH requests.
 func (s *SSHService) subscribeToTopic(topic string) error {
 	s.Logger.Info().Str("topic", topic).Msg("Subscribing to MQTT topic")
 
@@ -127,119 +229,71 @@ func (s *SSHService) subscribeToTopic(topic string) error {
 		s.Logger.Error().Err(err).Msg("Failed to subscribe to SSH request topic")
 		return err
 	}
-
-	s.Logger.Info().Msg("Successfully subscribed to SSH request topic")
 	return nil
 }
 
-// handleSSHRequest processes the incoming MQTT message with the requested port
+// handleSSHRequest processes incoming SSH requests from MQTT.
 func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 	var request models.SSHRequest
 	if err := json.Unmarshal(msg.Payload(), &request); err != nil {
-		s.Logger.Error().Err(err).Msg("Failed to unmarshal SSH request message")
+		s.Logger.Error().Err(err).Msg("Invalid SSH request payload")
 		return
 	}
-
-	s.Logger.Info().
-		Int("local_port", request.LocalPort).
-		Int("remote_port", request.RemotePort).
-		Str("backend_host", request.BackendHost).
-		Msg("Received reverse SSH port request")
 
 	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost, request.ServerID); err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to start reverse SSH")
 	}
 }
 
-// startReverseSSH sets up the reverse SSH tunnel
+// ---- SSH Connection Establishment ----
+
+// startReverseSSH establishes or reuses an SSH connection for port forwarding.
 func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, serverId string) error {
-	s.Logger.Info().Str("private_key_path", s.PrivateKeyPath).Msg("Reading private SSH key")
-	key, err := s.FileClient.ReadFile(s.PrivateKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to read private SSH key: %w", err)
+	if atomic.LoadInt32(&s.activeConns) >= int32(s.MaxSSHConnections) {
+		return fmt.Errorf("maximum SSH connections reached: %d", s.MaxSSHConnections)
 	}
 
-	privateKey, err := ssh.ParsePrivateKey([]byte(key))
-	if err != nil {
-		return fmt.Errorf("failed to parse private SSH key: %w", err)
-	}
+	s.clientPoolMutex.RLock()
+	client, found := s.clientPool[backendHost]
+	s.clientPoolMutex.RUnlock()
 
-	config := &ssh.ClientConfig{
-		User:            s.SSHUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(privateKey)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         5 * time.Second,
-	}
+	if !found {
+		config := &ssh.ClientConfig{
+			User:            s.SSHUser,
+			Auth:            []ssh.AuthMethod{ssh.PublicKeys(s.cachedPrivateKey)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         s.ConnectionTimeout,
+		}
 
-	client, exists := s.clientPool.Get(backendHost)
-	if !exists {
 		connStr := fmt.Sprintf("%s:%d", backendHost, s.BackendPort)
-		s.Logger.Info().Str("connection_string", connStr).Msg("Establishing SSH connection")
-
-		client, err = ssh.Dial("tcp", connStr, config)
+		newClient, err := ssh.Dial("tcp", connStr, config)
 		if err != nil {
 			return fmt.Errorf("failed to establish SSH connection: %w", err)
 		}
 
-		s.clientPool.Set(backendHost, client)
-		s.clientListeners.Set(backendHost, 0)
+		s.clientPoolMutex.Lock()
+		s.clientPool[backendHost] = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
+		s.clientPoolMutex.Unlock()
+
+		atomic.AddInt32(&s.activeConns, 1)
+
+		go s.monitorSSHConnection(backendHost, newClient)
+		client = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
 	}
 
-	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
+	listener, err := client.Client.Listen("tcp", fmt.Sprintf("localhost:%d", localPort))
 	if err != nil {
-		return fmt.Errorf("failed to set up port forwarding: %w", err)
+		atomic.AddInt32(&s.activeConns, -1)
+		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
 
+	s.listenersMutex.Lock()
 	s.listeners[remotePort] = listener
-	s.Logger.Info().
-		Int("local_port", localPort).
-		Int("remote_port", remotePort).
-		Msg("Port forwarding established")
+	s.listenersMutex.Unlock()
 
 	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
-
 	go s.acceptConnections(listener, remotePort)
-
 	return nil
-}
-
-// acceptConnections handles incoming connections on the listener
-func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
-	defer listener.Close()
-
-	for {
-		select {
-		case <-s.stopChan:
-			s.Logger.Info().Int("remote_port", remotePort).Msg("Stopping listener")
-			return
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				s.Logger.Error().Err(err).Msg("Error accepting connection")
-				return
-			}
-			go s.forwardConnection(conn, remotePort)
-		}
-	}
-}
-
-// forwardConnection forwards traffic between local and remote ports
-func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
-	defer conn.Close()
-
-	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", remotePort))
-	if err != nil {
-		s.Logger.Error().Err(err).Msg("Failed to connect to local service")
-		return
-	}
-	defer localConn.Close()
-
-	go io.Copy(localConn, conn)
-	io.Copy(conn, localConn)
-
-	s.Logger.Info().
-		Int("local_port", remotePort).
-		Msg("Finished forwarding connection")
 }
 
 // publishDeviceReply sends a DeviceReply message over MQTT
@@ -264,5 +318,55 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 		s.Logger.Error().Err(err).Msg("Failed to publish DeviceReply message")
 	} else {
 		s.Logger.Info().Msg("Published DeviceReply message")
+	}
+}
+
+// ---- Connection Forwarding ----
+
+// acceptConnections listens for incoming connections and forwards them.
+func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil || s.ctx.Err() != nil {
+			return
+		}
+
+		if atomic.LoadInt32(&s.activeConns) >= int32(s.MaxListeners) {
+			conn.Close()
+			continue
+		}
+
+		atomic.AddInt32(&s.activeConns, 1)
+		s.wg.Add(1)
+		go func() {
+			defer atomic.AddInt32(&s.activeConns, -1)
+			defer s.wg.Done()
+			s.forwardConnection(conn, remotePort)
+		}()
+	}
+}
+
+// Forwards data between the local and remote connections
+func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
+	defer conn.Close()
+	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", remotePort), s.ConnectionTimeout)
+	if err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to connect to local service")
+		return
+	}
+	defer localConn.Close()
+
+	// Enforce timeout for active connections
+	_ = conn.SetDeadline(time.Now().Add(s.ForwardTimeout))
+	_ = localConn.SetDeadline(time.Now().Add(s.ForwardTimeout))
+
+	if _, err := io.Copy(localConn, conn); err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to forward data")
+	}
+	if _, err := io.Copy(conn, localConn); err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to forward data")
 	}
 }
