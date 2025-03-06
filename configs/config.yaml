@@ -41,6 +41,11 @@ services:
     backend_port: 22
     ssh_user: "ben"
     private_key_path: "certs/id_rsa"
+    max_listeners: 10               
+    max_ssh_connections: 5           
+    connection_timeout: 30s         
+    forward_timeout: 5m            
+    auto_disconnect: 1h             
     enabled: false
   location_service:
     topic: "iot-location"
