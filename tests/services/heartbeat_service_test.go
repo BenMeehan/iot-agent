@@ -40,7 +40,10 @@ func TestHeartbeatService_Start(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Stop the service
-	service.Stop()
+	err = service.Stop()
+	if err != nil {
+		t.Errorf("Error stopping service: %v", err)
+	}
 
 	// Assert that the mocks were called as expected
 	mockDeviceInfo.AssertExpectations(t)
