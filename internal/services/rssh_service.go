@@ -41,6 +41,7 @@ type SSHService struct {
 	cancel           context.CancelFunc
 	cachedPrivateKey ssh.Signer
 	activeConns      int32
+	activeListeners  int32
 	clientPool       map[string]models.SSHClientWrapper
 	clientPoolMutex  sync.RWMutex
 	listeners        map[int]net.Listener
@@ -334,15 +335,15 @@ func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
 			return
 		}
 
-		if atomic.LoadInt32(&s.activeConns) >= int32(s.MaxListeners) {
+		if atomic.LoadInt32(&s.activeListeners) >= int32(s.MaxListeners) {
 			conn.Close()
 			continue
 		}
 
-		atomic.AddInt32(&s.activeConns, 1)
+		atomic.AddInt32(&s.activeListeners, 1)
 		s.wg.Add(1)
 		go func() {
-			defer atomic.AddInt32(&s.activeConns, -1)
+			defer atomic.AddInt32(&s.activeListeners, -1)
 			defer s.wg.Done()
 			s.forwardConnection(conn, remotePort)
 		}()
