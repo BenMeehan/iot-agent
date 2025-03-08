@@ -24,7 +24,7 @@ import (
 func startProfiler() {
 	go func() {
 		log.Info().Msg("Starting profiler on :6060")
-		if err := http.ListenAndServe(":6060", nil); err != nil {
+		if err := http.ListenAndServe("0.0.0.0:6060", nil); err != nil {
 			log.Error().Err(err).Msg("Failed to start pprof profiler")
 		}
 	}()
