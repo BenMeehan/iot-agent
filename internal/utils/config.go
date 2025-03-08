@@ -53,8 +53,6 @@ type Config struct {
 		SSH struct {
 			Topic             string        `yaml:"topic"`               // MQTT topic for SSH service
 			Enabled           bool          `yaml:"enabled"`             // Enable/disable SSH service
-			BackendHost       string        `yaml:"backend_host"`        // Host address for the SSH backend service
-			BackendPort       int           `yaml:"backend_port"`        // Host port for the SSH backend service
 			SSHUser           string        `yaml:"ssh_user"`            // SSH username for connecting to the backend
 			PrivateKeyPath    string        `yaml:"private_key_path"`    // Path to the device's private key
 			QOS               int           `yaml:"qos"`                 // MQTT QoS level for SSH service messages

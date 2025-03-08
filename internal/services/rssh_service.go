@@ -58,7 +58,7 @@ type SSHService struct {
 
 // NewSSHService initializes a new SSHService instance.
 func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
-	logger zerolog.Logger, backendHost string, backendPort int, sshUser string, privateKeyPath string,
+	logger zerolog.Logger, sshUser string, privateKeyPath string,
 	fileClient file.FileOperations, qos int, maxListeners, maxSSHConnections int,
 	connectionTimeout, forwardTimeout, autoDisconnect time.Duration) *SSHService {
 

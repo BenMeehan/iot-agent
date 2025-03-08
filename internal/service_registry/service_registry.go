@@ -178,8 +178,6 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					deviceInfo,
 					sr.mqttClient,
 					sr.Logger,
-					config.Services.SSH.BackendHost,
-					config.Services.SSH.BackendPort,
 					config.Services.SSH.SSHUser,
 					config.Services.SSH.PrivateKeyPath,
 					sr.fileClient,
