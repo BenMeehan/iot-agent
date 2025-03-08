@@ -30,8 +30,6 @@ type SSHService struct {
 
 	// Configuration
 	SubTopic       string
-	BackendHost    string
-	BackendPort    int
 	SSHUser        string
 	PrivateKeyPath string
 	QOS            int
@@ -87,8 +85,6 @@ func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqt
 		DeviceInfo:        deviceInfo,
 		MqttClient:        mqttClient,
 		Logger:            logger,
-		BackendHost:       backendHost,
-		BackendPort:       backendPort,
 		SSHUser:           sshUser,
 		PrivateKeyPath:    privateKeyPath,
 		FileClient:        fileClient,
@@ -241,7 +237,7 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
-	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendHost, request.ServerID); err != nil {
+	if err := s.startReverseSSH(request.LocalPort, request.RemotePort, request.BackendPort, request.BackendHost, request.ServerID); err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to start reverse SSH")
 	}
 }
@@ -249,7 +245,7 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 // ---- SSH Connection Establishment ----
 
 // startReverseSSH establishes or reuses an SSH connection for port forwarding.
-func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, serverId string) error {
+func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, backendHost, serverId string) error {
 	if atomic.LoadInt32(&s.activeConns) >= int32(s.MaxSSHConnections) {
 		return fmt.Errorf("maximum SSH connections reached: %d", s.MaxSSHConnections)
 	}
@@ -266,7 +262,7 @@ func (s *SSHService) startReverseSSH(localPort, remotePort int, backendHost, ser
 			Timeout:         s.ConnectionTimeout,
 		}
 
-		connStr := fmt.Sprintf("%s:%d", backendHost, s.BackendPort)
+		connStr := fmt.Sprintf("%s:%d", backendHost, backendPort)
 		newClient, err := ssh.Dial("tcp", connStr, config)
 		if err != nil {
 			return fmt.Errorf("failed to establish SSH connection: %w", err)
