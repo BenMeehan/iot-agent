@@ -134,6 +134,14 @@ func (s *SSHService) Stop() error {
 	s.Logger.Info().Msg("Stopping SSH service...")
 	s.cancel()
 
+	// Close all active listeners first to unblock accept calls
+	s.listenersMutex.Lock()
+	for _, listener := range s.listeners {
+		_ = listener.Close()
+	}
+	s.listeners = make(map[int]net.Listener)
+	s.listenersMutex.Unlock()
+
 	// Wait for all goroutines to finish
 	s.wg.Wait()
 
@@ -144,14 +152,6 @@ func (s *SSHService) Stop() error {
 	}
 	s.clientPool = make(map[string]models.SSHClientWrapper)
 	s.clientPoolMutex.Unlock()
-
-	// Close all active listeners
-	s.listenersMutex.Lock()
-	for _, listener := range s.listeners {
-		listener.Close()
-	}
-	s.listeners = make(map[int]net.Listener)
-	s.listenersMutex.Unlock()
 
 	// Unsubscribe from MQTT topic
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
@@ -326,24 +326,33 @@ func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
 	defer s.wg.Done()
 
 	for {
-		conn, err := listener.Accept()
-		if err != nil || s.ctx.Err() != nil {
-			s.Logger.Error().Err(err).Msg("Listener accept failed")
+		select {
+		case <-s.ctx.Done(): // Exit if context is canceled
+			s.Logger.Info().Msg("Stopping acceptConnections due to shutdown.")
 			return
-		}
+		default:
+			conn, err := listener.Accept()
+			if err != nil {
+				if s.ctx.Err() != nil {
+					return // Context is canceled, exit cleanly
+				}
+				s.Logger.Error().Err(err).Msg("Listener accept failed")
+				return
+			}
 
-		if atomic.LoadInt32(&s.activeListeners) >= int32(s.MaxListeners) {
-			conn.Close()
-			continue
-		}
+			if atomic.LoadInt32(&s.activeListeners) >= int32(s.MaxListeners) {
+				conn.Close()
+				continue
+			}
 
-		atomic.AddInt32(&s.activeListeners, 1)
-		s.wg.Add(1)
-		go func() {
-			defer atomic.AddInt32(&s.activeListeners, -1)
-			defer s.wg.Done()
-			s.forwardConnection(conn, remotePort)
-		}()
+			atomic.AddInt32(&s.activeListeners, 1)
+			s.wg.Add(1)
+			go func() {
+				defer atomic.AddInt32(&s.activeListeners, -1)
+				defer s.wg.Done()
+				s.forwardConnection(conn, remotePort)
+			}()
+		}
 	}
 }
 
