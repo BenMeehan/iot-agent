@@ -328,6 +328,7 @@ func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil || s.ctx.Err() != nil {
+			s.Logger.Error().Err(err).Msg("Listener accept failed")
 			return
 		}
 
