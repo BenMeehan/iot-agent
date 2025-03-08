@@ -191,7 +191,7 @@ func (u *UpdateService) ResumeFromState() error {
 		return nil
 	case constants.UpdateStateVerifying:
 		// Re-verify and decrypt the update
-		return u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"))
+		return u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"), "")
 	case constants.UpdateStateInstalling:
 		// Re-apply the update
 		instructionFile := filepath.Join(u.UpdateFilePath, "update_instructions.json")
@@ -216,12 +216,12 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	u.Logger.Info().
-		Str("UpdateURL", payload.UpdateURL).
-		Str("Version", payload.Version).
+		Str("UpdateURL", payload.FileUrl).
+		Str("Version", payload.UpdateVersion).
 		Msg("Parsed update command payload")
 
 	// Check if the version is newer
-	isNew, err := u.isNewVersion(payload.Version)
+	isNew, err := u.isNewVersion(payload.UpdateVersion)
 	if err != nil {
 		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to check version")
@@ -230,7 +230,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 
 	if !isNew {
 		u.Logger.Info().
-			Str("receivedVersion", payload.Version).
+			Str("receivedVersion", payload.UpdateVersion).
 			Msg("Received version is not newer or is equal to the current version. Update aborted.")
 		return
 	}
@@ -240,7 +240,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		u.Logger.Error().Err(err).Msg("Failed to set state to downloading")
 	}
 
-	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
+	if err := u.downloadUpdateFile(payload.FileUrl); err != nil {
 		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to download update file")
 		return
@@ -250,7 +250,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		u.Logger.Error().Err(err).Msg("Failed to set state to verifying")
 	}
 
-	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
+	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip"), payload.SHA256Checksum); err != nil {
 		u.setState(constants.UpdateStateFailure)
 		u.Logger.Error().Err(err).Msg("Failed to verify update")
 		return
@@ -277,6 +277,23 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	u.Logger.Info().Msg("Update installed successfully")
+
+	// Publish
+	if u.state == "success" {
+		mqttPayload := map[string]string{
+			"id":            payload.ID,
+			"update_status": "processed",
+		}
+		mqttPayloadBytes, _ := json.Marshal(&mqttPayload)
+		topic := "iot-update-devices/agent"
+		token := u.MqttClient.Publish(topic, byte(u.QOS), false, mqttPayloadBytes)
+		token.Wait()
+
+		if token.Error() != nil {
+			u.Logger.Error().Err(token.Error()).Msg("Failed pub")
+		}
+	}
+
 }
 
 // downloadUpdateFile downloads the encrypted update file from the provided URL
@@ -320,14 +337,14 @@ func (u *UpdateService) downloadUpdateFile(url string) error {
 }
 
 // verifyAndDecryptUpdate decrypts, verifies, and extracts the update files
-func (u *UpdateService) verifyAndDecryptUpdate(encryptedFilePath string) error {
-	decryptedFilePath := filepath.Join(u.UpdateFilePath, "decrypted_update.zip")
+func (u *UpdateService) verifyAndDecryptUpdate(encryptedFilePath string, expectedHash string) error {
+	// decryptedFilePath := filepath.Join(u.UpdateFilePath, "decrypted_update.zip")
 
-	if err := u.decryptFile(encryptedFilePath, decryptedFilePath); err != nil {
-		return err
-	}
+	// if err := u.decryptFile(encryptedFilePath, decryptedFilePath); err != nil {
+	// 	return err
+	// }
 
-	if err := u.verifyFileHash(decryptedFilePath); err != nil {
+	if err := u.verifyFileHash(encryptedFilePath, expectedHash); err != nil {
 		return err
 	}
 
@@ -336,7 +353,7 @@ func (u *UpdateService) verifyAndDecryptUpdate(encryptedFilePath string) error {
 
 // decryptFile decrypts an AES-encrypted file and writes the result to outputPath
 func (u *UpdateService) decryptFile(inputPath, outputPath string) error {
-	key := []byte("32-byte-long-encryption-key-123")
+	key := []byte("32-byte-long-encryption-key-1234")
 
 	// Open the encrypted file
 	encryptedFile, err := os.Open(inputPath)
@@ -375,8 +392,8 @@ func (u *UpdateService) decryptFile(inputPath, outputPath string) error {
 }
 
 // verifyFileHash compares the file's hash to the expected hash for integrity checking
-func (u *UpdateService) verifyFileHash(filePath string) error {
-	expectedHash := "expected-hash-here"
+func (u *UpdateService) verifyFileHash(filePath string, expectedHash string) error {
+	//expectedHash := "expected-hash-here"
 
 	file, err := os.Open(filePath)
 	if err != nil {

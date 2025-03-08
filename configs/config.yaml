@@ -33,7 +33,7 @@ services:
     qos: 2
     output_size_limit: 1024  
     max_execution_time: 10 
-    enabled: true
+    enabled: false
   ssh:
     topic: "iot-ssh"
     qos: 2
@@ -56,4 +56,4 @@ services:
     qos: 2
     update_file_path: "updates"
     state_file: "configs/update_state.json"
-    enabled: false
+    enabled: true
