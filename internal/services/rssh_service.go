@@ -128,22 +128,22 @@ func (s *SSHService) Start() error {
 	go s.cleanupExpiredConnections()
 	return nil
 }
-
-// Stop gracefully shuts down the SSH service.
 func (s *SSHService) Stop() error {
 	s.Logger.Info().Msg("Stopping SSH service...")
 	s.cancel()
 
-	// Close all active listeners first to unblock accept calls
+	// Close all active listeners to unblock `listener.Accept()`
 	s.listenersMutex.Lock()
-	for _, listener := range s.listeners {
+	for port, listener := range s.listeners {
+		s.Logger.Info().Int("port", port).Msg("Closing listener")
 		_ = listener.Close()
 	}
 	s.listeners = make(map[int]net.Listener)
 	s.listenersMutex.Unlock()
 
-	// Wait for all goroutines to finish
+	s.Logger.Info().Msg("Waiting for all goroutines to finish...") // Debug log
 	s.wg.Wait()
+	s.Logger.Info().Msg("All goroutines finished, shutting down.")
 
 	// Close all active SSH connections
 	s.clientPoolMutex.Lock()
