@@ -357,23 +357,20 @@ func (s *SSHService) acceptConnections(listener net.Listener, localPort int) {
 }
 
 // Forwards data between the local and remote connections
-func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
+func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
 	defer conn.Close()
-	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", localPort), s.ConnectionTimeout)
+
+	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to connect to local service")
 		return
 	}
 	defer localConn.Close()
 
-	// Enforce timeout for active connections
-	_ = conn.SetDeadline(time.Now().Add(s.ForwardTimeout))
-	_ = localConn.SetDeadline(time.Now().Add(s.ForwardTimeout))
+	go io.Copy(localConn, conn)
+	io.Copy(conn, localConn)
 
-	if _, err := io.Copy(localConn, conn); err != nil {
-		s.Logger.Error().Err(err).Msg("Failed to forward data")
-	}
-	if _, err := io.Copy(conn, localConn); err != nil {
-		s.Logger.Error().Err(err).Msg("Failed to forward data")
-	}
+	s.Logger.Info().
+		Int("local_port", remotePort).
+		Msg("Finished forwarding connection")
 }
