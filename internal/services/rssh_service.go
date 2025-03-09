@@ -278,18 +278,18 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		client = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
 	}
 
-	listener, err := client.Client.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", localPort))
+	listener, err := client.Client.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", remotePort))
 	if err != nil {
 		atomic.AddInt32(&s.activeConns, -1)
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
 
 	s.listenersMutex.Lock()
-	s.listeners[remotePort] = listener
+	s.listeners[localPort] = listener
 	s.listenersMutex.Unlock()
 
 	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
-	go s.acceptConnections(listener, remotePort)
+	go s.acceptConnections(listener, localPort)
 	return nil
 }
 
@@ -321,7 +321,7 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 // ---- Connection Forwarding ----
 
 // acceptConnections listens for incoming connections and forwards them.
-func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
+func (s *SSHService) acceptConnections(listener net.Listener, localPort int) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
@@ -350,16 +350,16 @@ func (s *SSHService) acceptConnections(listener net.Listener, remotePort int) {
 			go func() {
 				defer atomic.AddInt32(&s.activeListeners, -1)
 				defer s.wg.Done()
-				s.forwardConnection(conn, remotePort)
+				s.forwardConnection(conn, localPort)
 			}()
 		}
 	}
 }
 
 // Forwards data between the local and remote connections
-func (s *SSHService) forwardConnection(conn net.Conn, remotePort int) {
+func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 	defer conn.Close()
-	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("0.0.0.0:%d", remotePort), s.ConnectionTimeout)
+	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", localPort), s.ConnectionTimeout)
 	if err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to connect to local service")
 		return
