@@ -278,7 +278,7 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		client = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
 	}
 
-	listener, err := client.Client.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", remotePort))
+	listener, err := client.Client.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
 		atomic.AddInt32(&s.activeConns, -1)
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
