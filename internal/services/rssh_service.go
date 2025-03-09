@@ -22,28 +22,33 @@ import (
 
 // SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
-	DeviceInfo        identity.DeviceInfoInterface
-	MqttClient        mqtt.MQTTClient
-	FileClient        file.FileOperations
-	Logger            zerolog.Logger
+	// Dependencies
+	DeviceInfo identity.DeviceInfoInterface
+	MqttClient mqtt.MQTTClient
+	FileClient file.FileOperations
+	Logger     zerolog.Logger
+
+	// Configuration
 	SubTopic          string
 	SSHUser           string
 	PrivateKeyPath    string
 	QOS               int
-	ctx               context.Context
-	cancel            context.CancelFunc
-	cachedPrivateKey  ssh.Signer
-	activeConns       int32
-	activeListeners   int32
-	clientPool        map[string]models.SSHClientWrapper
-	clientPoolMutex   sync.RWMutex
-	listeners         map[int]net.Listener
-	listenersMutex    sync.RWMutex
-	wg                sync.WaitGroup
 	MaxListeners      int
 	MaxSSHConnections int
 	ConnectionTimeout time.Duration
 	AutoDisconnect    time.Duration
+	activeConns       int32
+	activeListeners   int32
+	cachedPrivateKey  ssh.Signer
+
+	// Internal state
+	ctx             context.Context
+	cancel          context.CancelFunc
+	clientPool      map[string]models.SSHClientWrapper
+	clientPoolMutex sync.RWMutex
+	listeners       map[int]net.Listener
+	listenersMutex  sync.RWMutex
+	wg              sync.WaitGroup
 }
 
 // NewSSHService initializes a new SSHService instance.
@@ -175,34 +180,6 @@ func (s *SSHService) cleanupExpiredConnections() {
 	}
 }
 
-// monitorSSHConnection checks the health of the SSH connection.
-func (s *SSHService) monitorSSHConnection(backendHost string, client *ssh.Client) {
-	s.wg.Add(1)
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.Logger.Debug().Str("backend", backendHost).Msg("Stopping SSH connection monitor")
-			return
-		case <-ticker.C:
-			_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
-			if err != nil {
-				s.Logger.Warn().Str("backend", backendHost).Err(err).Msg("SSH connection lost")
-				s.clientPoolMutex.Lock()
-				delete(s.clientPool, backendHost)
-				s.clientPoolMutex.Unlock()
-				client.Close()
-				atomic.AddInt32(&s.activeConns, -1)
-				return
-			}
-		}
-	}
-}
-
 // subscribeToTopic subscribes to the MQTT topic for SSH requests.
 func (s *SSHService) subscribeToTopic(topic string) error {
 	s.Logger.Info().Str("topic", topic).Msg("Subscribing to MQTT topic")
@@ -270,7 +247,6 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		atomic.AddInt32(&s.activeConns, 1)
 		s.Logger.Info().Str("backend", backendHost).Msg("Established new SSH connection")
 
-		go s.monitorSSHConnection(backendHost, newClient)
 		client = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
 	}
 
@@ -291,8 +267,8 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		Str("backend", backendHost).
 		Msg("Port forwarding started")
 
-	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
 	go s.acceptConnections(listener, localPort)
+	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
 	return nil
 }
 
@@ -373,50 +349,45 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 
 	s.Logger.Debug().Int("local_port", localPort).Msg("Forwarding connection established")
 
-	// Channels to signal completion of each direction
-	remoteToLocalDone := make(chan struct{})
-	localToRemoteDone := make(chan struct{})
+	// Use a WaitGroup to track the copy goroutines
+	var wg sync.WaitGroup
+	wg.Add(2)
 
 	// Remote to local forwarding
 	go func() {
-		defer close(remoteToLocalDone)
-		if _, err := io.Copy(localConn, conn); err != nil && s.ctx.Err() == nil {
+		defer wg.Done()
+		_, err := io.Copy(localConn, conn)
+		if err != nil && s.ctx.Err() == nil {
 			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding remote to local")
 		}
 	}()
 
 	// Local to remote forwarding
 	go func() {
-		defer close(localToRemoteDone)
-		if _, err := io.Copy(conn, localConn); err != nil && s.ctx.Err() == nil {
+		defer wg.Done()
+		_, err := io.Copy(conn, localConn)
+		if err != nil && s.ctx.Err() == nil {
 			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding local to remote")
 		}
 	}()
 
 	// Wait for either context cancellation or both directions to complete
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.Logger.Debug().Int("local_port", localPort).Msg("Stopping forwarding due to shutdown")
-			conn.Close()      // Unblock io.Copy in both directions
-			localConn.Close() // Ensure both connections are closed
-			// Wait for goroutines to finish
-			<-remoteToLocalDone
-			<-localToRemoteDone
-			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
-			return
-		case <-remoteToLocalDone:
-			if _, ok := <-localToRemoteDone; ok {
-				continue // One direction finished, wait for the other or context
-			}
-			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
-			return
-		case <-localToRemoteDone:
-			if _, ok := <-remoteToLocalDone; ok {
-				continue // One direction finished, wait for the other or context
-			}
-			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
-			return
-		}
+	select {
+	case <-s.ctx.Done():
+		s.Logger.Debug().Int("local_port", localPort).Msg("Stopping forwarding due to shutdown")
+		conn.Close()
+		localConn.Close()
+		wg.Wait() // Ensure both goroutines finish
+	case <-func() chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		return done
+	}():
+		// Both directions completed naturally
 	}
+
+	s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
 }
