@@ -1,9 +1,8 @@
 package models
 
 import (
+	"net"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // SSHRequest represents an SSH port forwarding request sent via MQTT.
@@ -34,9 +33,10 @@ type DisconnectRequest struct {
 	Lport    int    `json:"lport"`    // Local port on the IoT device
 }
 
-// SSHClientWrapper encapsulates an active SSH client connection along with its creation time.
-// This structure is used for managing active SSH connections in a client pool.
-type SSHClientWrapper struct {
-	Client    *ssh.Client // Active SSH client session
-	StartTime time.Time   // Timestamp indicating when the SSH connection was established
+// ListenerWrapper holds a listener and its creation time for expiration tracking.
+// This is used to track the creation time of a listener so that it can be closed
+// after expiry period to prevent resource leaks and misuse
+type ListenerWrapper struct {
+	Listener  net.Listener // Listener for the SSH tunnel
+	StartTime time.Time    // Time when the listener was created
 }

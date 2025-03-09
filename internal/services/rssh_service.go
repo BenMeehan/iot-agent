@@ -22,13 +22,10 @@ import (
 
 // SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
-	// Dependencies
-	DeviceInfo identity.DeviceInfoInterface
-	MqttClient mqtt.MQTTClient
-	FileClient file.FileOperations
-	Logger     zerolog.Logger
-
-	// Configuration
+	DeviceInfo        identity.DeviceInfoInterface
+	MqttClient        mqtt.MQTTClient
+	FileClient        file.FileOperations
+	Logger            zerolog.Logger
 	SubTopic          string
 	SSHUser           string
 	PrivateKeyPath    string
@@ -40,15 +37,13 @@ type SSHService struct {
 	activeConns       int32
 	activeListeners   int32
 	cachedPrivateKey  ssh.Signer
-
-	// Internal state
-	ctx             context.Context
-	cancel          context.CancelFunc
-	clientPool      map[string]models.SSHClientWrapper
-	clientPoolMutex sync.RWMutex
-	listeners       map[int]net.Listener
-	listenersMutex  sync.RWMutex
-	wg              sync.WaitGroup
+	ctx               context.Context
+	cancel            context.CancelFunc
+	clientPool        map[string]*ssh.Client
+	clientPoolMutex   sync.RWMutex
+	listeners         map[string]map[int]models.ListenerWrapper // backendHost -> localPort -> ListenerWrapper
+	listenersMutex    sync.RWMutex
+	wg                sync.WaitGroup
 }
 
 // NewSSHService initializes a new SSHService instance.
@@ -83,8 +78,8 @@ func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqt
 		QOS:               qos,
 		ctx:               ctx,
 		cancel:            cancel,
-		clientPool:        make(map[string]models.SSHClientWrapper),
-		listeners:         make(map[int]net.Listener),
+		clientPool:        make(map[string]*ssh.Client),
+		listeners:         make(map[string]map[int]models.ListenerWrapper),
 		MaxListeners:      maxListeners,
 		MaxSSHConnections: maxSSHConnections,
 		ConnectionTimeout: connectionTimeout,
@@ -114,7 +109,7 @@ func (s *SSHService) Start() error {
 		return err
 	}
 
-	go s.cleanupExpiredConnections()
+	go s.cleanupExpiredListeners()
 	s.Logger.Info().Msg("SSH service started successfully")
 	return nil
 }
@@ -124,26 +119,28 @@ func (s *SSHService) Stop() error {
 	s.cancel()
 
 	s.listenersMutex.Lock()
-	for port, listener := range s.listeners {
-		s.Logger.Debug().Int("port", port).Msg("Closing listener")
-		if err := listener.Close(); err != nil {
-			s.Logger.Warn().Err(err).Int("port", port).Msg("Error closing listener")
+	for backendHost, listeners := range s.listeners {
+		for port, wrapper := range listeners {
+			s.Logger.Debug().Int("port", port).Str("backend", backendHost).Msg("Closing listener")
+			if err := wrapper.Listener.Close(); err != nil {
+				s.Logger.Warn().Err(err).Int("port", port).Str("backend", backendHost).Msg("Error closing listener")
+			}
 		}
 	}
-	s.listeners = make(map[int]net.Listener)
+	s.listeners = make(map[string]map[int]models.ListenerWrapper)
 	s.listenersMutex.Unlock()
 
 	s.Logger.Debug().Msg("Waiting for all goroutines to finish")
 	s.wg.Wait()
 
 	s.clientPoolMutex.Lock()
-	for backendHost, wrapper := range s.clientPool {
+	for backendHost, client := range s.clientPool {
 		s.Logger.Debug().Str("backend", backendHost).Msg("Closing SSH connection")
-		if err := wrapper.Client.Close(); err != nil {
+		if err := client.Close(); err != nil {
 			s.Logger.Warn().Err(err).Str("backend", backendHost).Msg("Error closing SSH connection")
 		}
 	}
-	s.clientPool = make(map[string]models.SSHClientWrapper)
+	s.clientPool = make(map[string]*ssh.Client)
 	s.clientPoolMutex.Unlock()
 
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
@@ -153,29 +150,48 @@ func (s *SSHService) Stop() error {
 	return nil
 }
 
-// cleanupExpiredConnections periodically removes stale SSH connections.
-func (s *SSHService) cleanupExpiredConnections() {
-	ticker := time.NewTicker(10 * time.Minute)
+// cleanupExpiredListeners periodically removes stale listeners and their SSH clients if no listeners remain.
+func (s *SSHService) cleanupExpiredListeners() {
+	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.Logger.Debug().Msg("Stopping cleanup of expired connections")
+			s.Logger.Debug().Msg("Stopping cleanup of expired listeners")
 			return
 		case <-ticker.C:
 			now := time.Now()
+			s.listenersMutex.Lock()
 			s.clientPoolMutex.Lock()
-			for backendHost, wrapper := range s.clientPool {
-				if now.Sub(wrapper.StartTime) > s.AutoDisconnect {
-					s.Logger.Info().Str("backend", backendHost).Msg("Auto-disconnecting stale SSH connection")
-					if err := wrapper.Client.Close(); err != nil {
-						s.Logger.Warn().Err(err).Str("backend", backendHost).Msg("Error closing stale connection")
+
+			for backendHost, listeners := range s.listeners {
+				for port, wrapper := range listeners {
+					if now.Sub(wrapper.StartTime) > s.AutoDisconnect {
+						s.Logger.Info().Int("port", port).Str("backend", backendHost).Msg("Closing expired listener")
+						if err := wrapper.Listener.Close(); err != nil {
+							s.Logger.Warn().Err(err).Int("port", port).Str("backend", backendHost).Msg("Error closing expired listener")
+						}
+						delete(listeners, port)
+						atomic.AddInt32(&s.activeListeners, -1)
 					}
-					delete(s.clientPool, backendHost)
+				}
+				// If no listeners remain for this backendHost, close the SSH client
+				if len(listeners) == 0 {
+					if client, exists := s.clientPool[backendHost]; exists {
+						s.Logger.Info().Str("backend", backendHost).Msg("No listeners remain, closing SSH connection")
+						if err := client.Close(); err != nil {
+							s.Logger.Warn().Err(err).Str("backend", backendHost).Msg("Error closing SSH connection")
+						}
+						delete(s.clientPool, backendHost)
+						delete(s.listeners, backendHost)
+						atomic.AddInt32(&s.activeConns, -1)
+					}
 				}
 			}
+
 			s.clientPoolMutex.Unlock()
+			s.listenersMutex.Unlock()
 		}
 	}
 }
@@ -241,24 +257,29 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		}
 
 		s.clientPoolMutex.Lock()
-		s.clientPool[backendHost] = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
+		s.clientPool[backendHost] = newClient
 		s.clientPoolMutex.Unlock()
 
 		atomic.AddInt32(&s.activeConns, 1)
 		s.Logger.Info().Str("backend", backendHost).Msg("Established new SSH connection")
-
-		client = models.SSHClientWrapper{Client: newClient, StartTime: time.Now()}
+		client = newClient
 	}
 
-	listener, err := client.Client.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
+	listener, err := client.Listen("tcp", fmt.Sprintf("localhost:%d", remotePort))
 	if err != nil {
 		s.Logger.Error().Err(err).Int("remote_port", remotePort).Msg("Failed to setup port forwarding")
-		atomic.AddInt32(&s.activeConns, -1)
 		return fmt.Errorf("failed to setup port forwarding: %w", err)
 	}
 
 	s.listenersMutex.Lock()
-	s.listeners[localPort] = listener
+	if _, exists := s.listeners[backendHost]; !exists {
+		s.listeners[backendHost] = make(map[int]models.ListenerWrapper)
+	}
+	s.listeners[backendHost][localPort] = models.ListenerWrapper{
+		Listener:  listener,
+		StartTime: time.Now(),
+	}
+	atomic.AddInt32(&s.activeListeners, 1)
 	s.listenersMutex.Unlock()
 
 	s.Logger.Info().
@@ -267,7 +288,7 @@ func (s *SSHService) startReverseSSH(localPort, remotePort, backendPort int, bac
 		Str("backend", backendHost).
 		Msg("Port forwarding started")
 
-	go s.acceptConnections(listener, localPort)
+	go s.acceptConnections(listener, localPort, backendHost)
 	s.publishDeviceReply(s.DeviceInfo.GetDeviceID(), serverId, localPort, remotePort)
 	return nil
 }
@@ -298,23 +319,23 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 }
 
 // acceptConnections listens for incoming connections and forwards them.
-func (s *SSHService) acceptConnections(listener net.Listener, localPort int) {
+func (s *SSHService) acceptConnections(listener net.Listener, localPort int, backendHost string) {
 	s.wg.Add(1)
 	defer s.wg.Done()
 
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.Logger.Debug().Int("local_port", localPort).Msg("Stopping acceptConnections due to shutdown")
+			s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Stopping acceptConnections due to shutdown")
 			return
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
 				if s.ctx.Err() != nil {
-					s.Logger.Debug().Int("local_port", localPort).Msg("Accept stopped due to context cancellation")
+					s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Accept stopped due to context cancellation")
 					return
 				}
-				s.Logger.Error().Err(err).Int("local_port", localPort).Msg("Listener accept failed")
+				s.Logger.Error().Err(err).Int("local_port", localPort).Str("backend", backendHost).Msg("Listener accept failed")
 				return
 			}
 
@@ -324,32 +345,29 @@ func (s *SSHService) acceptConnections(listener net.Listener, localPort int) {
 				continue
 			}
 
-			atomic.AddInt32(&s.activeListeners, 1)
-			s.Logger.Debug().Int("local_port", localPort).Msg("Accepted new connection")
+			s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Accepted new connection")
 			s.wg.Add(1)
 			go func() {
-				defer atomic.AddInt32(&s.activeListeners, -1)
 				defer s.wg.Done()
-				s.forwardConnection(conn, localPort)
+				s.forwardConnection(conn, localPort, backendHost)
 			}()
 		}
 	}
 }
 
 // forwardConnection forwards data between the local and remote connections
-func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
+func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost string) {
 	defer conn.Close()
 
 	localConn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", localPort))
 	if err != nil {
-		s.Logger.Error().Err(err).Int("local_port", localPort).Msg("Failed to connect to local service")
+		s.Logger.Error().Err(err).Int("local_port", localPort).Str("backend", backendHost).Msg("Failed to connect to local service")
 		return
 	}
 	defer localConn.Close()
 
-	s.Logger.Debug().Int("local_port", localPort).Msg("Forwarding connection established")
+	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 
-	// Use a WaitGroup to track the copy goroutines
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -358,7 +376,7 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 		defer wg.Done()
 		_, err := io.Copy(localConn, conn)
 		if err != nil && s.ctx.Err() == nil {
-			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding remote to local")
+			s.Logger.Warn().Err(err).Int("local_port", localPort).Str("backend", backendHost).Msg("Error forwarding remote to local")
 		}
 	}()
 
@@ -367,17 +385,17 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 		defer wg.Done()
 		_, err := io.Copy(conn, localConn)
 		if err != nil && s.ctx.Err() == nil {
-			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding local to remote")
+			s.Logger.Warn().Err(err).Int("local_port", localPort).Str("backend", backendHost).Msg("Error forwarding local to remote")
 		}
 	}()
 
 	// Wait for either context cancellation or both directions to complete
 	select {
 	case <-s.ctx.Done():
-		s.Logger.Debug().Int("local_port", localPort).Msg("Stopping forwarding due to shutdown")
+		s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Stopping forwarding due to shutdown")
 		conn.Close()
 		localConn.Close()
-		wg.Wait() // Ensure both goroutines finish
+		wg.Wait()
 	case <-func() chan struct{} {
 		done := make(chan struct{})
 		go func() {
@@ -386,8 +404,7 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 		}()
 		return done
 	}():
-		// Both directions completed naturally
 	}
 
-	s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
+	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Finished forwarding connection")
 }
