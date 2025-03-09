@@ -114,6 +114,8 @@ func (s *SSHService) Start() error {
 	return nil
 }
 
+// Stop shuts down the SSH service and closes all active connections.
+// TODO: Publish a message to the server to notify disconnects.
 func (s *SSHService) Stop() error {
 	s.Logger.Info().Msg("Stopping SSH service...")
 	s.cancel()
@@ -365,6 +367,15 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost
 		return
 	}
 	defer localConn.Close()
+
+	// Set read deadline so io.Copy doesn't block forever
+	timeout := 2 * time.Minute
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	localConn.SetReadDeadline(time.Now().Add(timeout))
+
+	// Prevent lingering connections
+	conn.(*net.TCPConn).SetLinger(0)
+	localConn.(*net.TCPConn).SetLinger(0)
 
 	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 

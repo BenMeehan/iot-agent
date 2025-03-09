@@ -9,9 +9,6 @@ const (
 	// ConnectionTimeout specifies the timeout duration for establishing an SSH connection.
 	ConnectionTimeout = 30 * time.Second
 
-	// ForwardTimeout determines how long an SSH-forwarded connection can remain open.
-	ForwardTimeout = 5 * time.Minute
-
 	// AutoDisconnect sets the duration after which inactive SSH connections will be closed.
 	AutoDisconnect = 1 * time.Hour
 
