@@ -59,7 +59,6 @@ type Config struct {
 			MaxListeners      int           `yaml:"max_listeners"`       // Maximum number of active SSH listeners
 			MaxSSHConnections int           `yaml:"max_ssh_connections"` // Maximum number of concurrent SSH connections
 			ConnectionTimeout time.Duration `yaml:"connection_timeout"`  // Timeout duration for establishing an SSH connection
-			ForwardTimeout    time.Duration `yaml:"forward_timeout"`     // Maximum duration an SSH-forwarded connection remains open
 			AutoDisconnect    time.Duration `yaml:"auto_disconnect"`     // Duration after which inactive SSH connections are closed
 		} `yaml:"ssh"`
 

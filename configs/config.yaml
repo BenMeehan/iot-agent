@@ -42,7 +42,6 @@ services:
     max_listeners: 10               
     max_ssh_connections: 5           
     connection_timeout: 30s         
-    forward_timeout: 5m            
     auto_disconnect: 1h             
     enabled: true
   location_service:
