@@ -41,8 +41,9 @@ services:
     private_key_path: "certs/id_rsa"
     max_listeners: 10               
     max_ssh_connections: 5           
-    connection_timeout: 30s         
-    auto_disconnect: 1h             
+    connection_timeout: 30s 
+    forward_timeout: 2m        
+    auto_disconnect: 2m             
     enabled: true
   location_service:
     topic: "iot-location"

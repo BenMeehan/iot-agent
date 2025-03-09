@@ -185,6 +185,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.SSH.MaxListeners,
 					config.Services.SSH.MaxSSHConnections,
 					config.Services.SSH.ConnectionTimeout,
+					config.Services.SSH.ForwardTimeout,
 					config.Services.SSH.AutoDisconnect,
 				), nil
 			},

@@ -33,6 +33,7 @@ type SSHService struct {
 	MaxListeners      int
 	MaxSSHConnections int
 	ConnectionTimeout time.Duration
+	ForwardTimeout    time.Duration
 	AutoDisconnect    time.Duration
 	activeConns       int32
 	activeListeners   int32
@@ -50,7 +51,7 @@ type SSHService struct {
 func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
 	logger zerolog.Logger, sshUser string, privateKeyPath string,
 	fileClient file.FileOperations, qos int, maxListeners, maxSSHConnections int,
-	connectionTimeout, autoDisconnect time.Duration) *SSHService {
+	connectionTimeout, forwardTimeout, autoDisconnect time.Duration) *SSHService {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -83,6 +84,7 @@ func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqt
 		MaxListeners:      maxListeners,
 		MaxSSHConnections: maxSSHConnections,
 		ConnectionTimeout: connectionTimeout,
+		ForwardTimeout:    forwardTimeout,
 		AutoDisconnect:    autoDisconnect,
 	}
 }
@@ -369,9 +371,8 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost
 	defer localConn.Close()
 
 	// Set read deadline so io.Copy doesn't block forever
-	timeout := 2 * time.Minute
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	localConn.SetReadDeadline(time.Now().Add(timeout))
+	conn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	localConn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
 
 	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 
