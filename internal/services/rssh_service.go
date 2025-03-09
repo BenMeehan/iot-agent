@@ -373,34 +373,50 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int) {
 
 	s.Logger.Debug().Int("local_port", localPort).Msg("Forwarding connection established")
 
-	// Use a channel to signal when the goroutine completes
-	done := make(chan struct{})
+	// Channels to signal completion of each direction
+	remoteToLocalDone := make(chan struct{})
+	localToRemoteDone := make(chan struct{})
+
+	// Remote to local forwarding
 	go func() {
-		defer close(done)
+		defer close(remoteToLocalDone)
 		if _, err := io.Copy(localConn, conn); err != nil && s.ctx.Err() == nil {
 			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding remote to local")
 		}
 	}()
 
-	// Main forwarding loop with context cancellation
-	select {
-	case <-s.ctx.Done():
-		s.Logger.Debug().Int("local_port", localPort).Msg("Stopping forwarding due to shutdown")
-		conn.Close() // Close the connection to unblock io.Copy
-		localConn.Close()
-	case <-done:
-		// If the goroutine finishes first, proceed with the second io.Copy
+	// Local to remote forwarding
+	go func() {
+		defer close(localToRemoteDone)
 		if _, err := io.Copy(conn, localConn); err != nil && s.ctx.Err() == nil {
 			s.Logger.Warn().Err(err).Int("local_port", localPort).Msg("Error forwarding local to remote")
 		}
-	}
+	}()
 
-	// Wait for the goroutine to finish if it hasn't already
-	select {
-	case <-done:
-	case <-s.ctx.Done():
-		s.Logger.Info().Int("local_port", localPort).Msg("Forcing closure of forwarding goroutine")
+	// Wait for either context cancellation or both directions to complete
+	for {
+		select {
+		case <-s.ctx.Done():
+			s.Logger.Debug().Int("local_port", localPort).Msg("Stopping forwarding due to shutdown")
+			conn.Close()      // Unblock io.Copy in both directions
+			localConn.Close() // Ensure both connections are closed
+			// Wait for goroutines to finish
+			<-remoteToLocalDone
+			<-localToRemoteDone
+			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
+			return
+		case <-remoteToLocalDone:
+			if _, ok := <-localToRemoteDone; ok {
+				continue // One direction finished, wait for the other or context
+			}
+			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
+			return
+		case <-localToRemoteDone:
+			if _, ok := <-remoteToLocalDone; ok {
+				continue // One direction finished, wait for the other or context
+			}
+			s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
+			return
+		}
 	}
-
-	s.Logger.Debug().Int("local_port", localPort).Msg("Finished forwarding connection")
 }
