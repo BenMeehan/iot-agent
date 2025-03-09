@@ -373,10 +373,6 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	localConn.SetReadDeadline(time.Now().Add(timeout))
 
-	// Prevent lingering connections
-	conn.(*net.TCPConn).SetLinger(0)
-	localConn.(*net.TCPConn).SetLinger(0)
-
 	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 
 	var wg sync.WaitGroup
