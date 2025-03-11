@@ -1,49 +1,78 @@
 package jwt
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v4"
 
 	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/file"
 )
 
-// JWTManagerInterface defines the methods to manage JWT tokens.
+// JWTManagerInterface defines methods to manage JWT and refresh tokens.
 type JWTManagerInterface interface {
-	LoadJWT() error             // Loads the JWT token from the file.
-	SaveJWT(token string) error // Saves the JWT token to the file.
-	GetJWT() string             // Retrieves the current JWT token.
-	IsJWTValid() (bool, error)  // Checks if the current JWT token is valid.
+	Initialize(secretPath string) error
+	LoadJWT() error
+	SaveJWT(token string) error
+	GetJWT() string
+	IsJWTValid() (bool, error)
+	ValidateJWT(token string) (*jwt.Token, error)
+	SaveRefreshToken(token string) error
+	GetRefreshToken() (string, error)
 }
 
-// JWTManager manages the JWT token and its file operations.
+// tokenData holds both JWT and refresh token for storage.
+type tokenData struct {
+	JWTToken     string `json:"jwt_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+// JWTManager manages JWT and refresh tokens with file operations.
 type JWTManager struct {
-	JWTFilePath       string                                // Path to the JWT file.
-	Token             string                                // Current JWT token.
-	FileOps           file.FileOperations                   // Interface for file operations.
-	EncryptionManager encryption.EncryptionManagerInterface // Interface for encryption operations.
+	TokenFilePath     string
+	Token             string
+	RefreshToken      string
+	FileOps           file.FileOperations
+	EncryptionManager encryption.EncryptionManagerInterface
+	Secret            []byte
 }
 
-// NewJWTManager initializes a new JWTManager instance.
-func NewJWTManager(filePath string, fileOps file.FileOperations, encryptionManager encryption.EncryptionManagerInterface) JWTManagerInterface {
+// NewJWTManager initializes a new JWTManager instance with a single file path.
+func NewJWTManager(tokenFilePath string, fileOps file.FileOperations, encryptionManager encryption.EncryptionManagerInterface) JWTManagerInterface {
 	return &JWTManager{
-		JWTFilePath:       filePath,
+		TokenFilePath:     tokenFilePath,
 		FileOps:           fileOps,
 		EncryptionManager: encryptionManager,
 	}
 }
 
-// LoadJWT reads the JWT token from the file.
-// If the file does not exist or is empty, it initializes the Token to an empty string.
+func (jm *JWTManager) Initialize(secretPath string) error {
+	// Load secret key
+	secret, err := jm.FileOps.ReadFileRaw(secretPath)
+	if err != nil || len(secret) == 0 {
+		return errors.New("failed to read or validate secret key")
+	}
+	jm.Secret = secret
+
+	// Load JWT and refresh token
+	if err := jm.LoadJWT(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// LoadJWT reads the JWT and refresh token from the single file.
+// If the file does not exist or is empty, it initializes both to empty strings.
 func (jm *JWTManager) LoadJWT() error {
-	data, err := jm.FileOps.ReadFileRaw(jm.JWTFilePath)
+	data, err := jm.FileOps.ReadFileRaw(jm.TokenFilePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			jm.Token = ""
+			jm.RefreshToken = ""
 			return nil
 		}
 		return err
@@ -51,26 +80,53 @@ func (jm *JWTManager) LoadJWT() error {
 
 	if len(data) == 0 {
 		jm.Token = ""
+		jm.RefreshToken = ""
 		return nil
 	}
 
-	decryptedToken, err := jm.EncryptionManager.Decrypt(data)
+	decryptedData, err := jm.EncryptionManager.Decrypt(data)
 	if err != nil {
 		return err
 	}
 
-	jm.Token = string(decryptedToken)
+	var tokens tokenData
+	if err := json.Unmarshal(decryptedData, &tokens); err != nil {
+		return errors.New("failed to parse token data: " + err.Error())
+	}
+
+	jm.Token = tokens.JWTToken
+	jm.RefreshToken = tokens.RefreshToken
 	return nil
 }
 
-// SaveJWT saves the given JWT token to the file.
+// SaveJWT saves the given JWT token to the file, preserving the refresh token.
 func (jm *JWTManager) SaveJWT(token string) error {
-	encryptedToken, err := jm.EncryptionManager.Encrypt([]byte(token))
+	// Validate the token's signature before saving
+	_, err := jm.ValidateJWT(token)
+	if err != nil {
+		return errors.New("invalid JWT signature: " + err.Error())
+	}
+
+	// Load current refresh token if not in memory
+	if jm.RefreshToken == "" {
+		_, err := jm.GetRefreshToken()
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	// Create combined token data
+	tokens := tokenData{
+		JWTToken:     token,
+		RefreshToken: jm.RefreshToken,
+	}
+
+	encryptedTokens, err := jm.encryptTokenData(tokens)
 	if err != nil {
 		return err
 	}
 
-	if err := jm.FileOps.WriteFileRaw(jm.JWTFilePath, encryptedToken); err != nil {
+	if err := jm.FileOps.WriteFileRaw(jm.TokenFilePath, encryptedTokens); err != nil {
 		return err
 	}
 
@@ -78,44 +134,80 @@ func (jm *JWTManager) SaveJWT(token string) error {
 	return nil
 }
 
-// GetJWT retrieves the current JWT token.
+// GetJWT retrieves the current JWT token only if it is valid.
 func (jm *JWTManager) GetJWT() string {
+	if jm.Token == "" {
+		return ""
+	}
+
+	isValid, err := jm.IsJWTValid()
+	if err != nil || !isValid {
+		return ""
+	}
+
 	return jm.Token
 }
 
-// jwtDecodeBase64 decodes a base64 JWT part.
-func jwtDecodeBase64(input string) (string, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(input)
-	if err != nil {
-		return "", err
+// SaveRefreshToken saves the given refresh token to the file, preserving the JWT.
+func (jm *JWTManager) SaveRefreshToken(token string) error {
+	// Load current JWT if not in memory
+	if jm.Token == "" {
+		err := jm.LoadJWT()
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
-	return string(decoded), nil
+
+	// Create combined token data
+	tokens := tokenData{
+		JWTToken:     jm.Token,
+		RefreshToken: token,
+	}
+
+	encryptedTokens, err := jm.encryptTokenData(tokens)
+	if err != nil {
+		return err
+	}
+
+	if err := jm.FileOps.WriteFileRaw(jm.TokenFilePath, encryptedTokens); err != nil {
+		return err
+	}
+
+	jm.RefreshToken = token
+	return nil
 }
 
-// IsJWTValid checks if the current JWT token is valid.
+// GetRefreshToken retrieves the current refresh token, loading it from the file if necessary.
+func (jm *JWTManager) GetRefreshToken() (string, error) {
+	if jm.RefreshToken == "" && jm.Token == "" {
+		err := jm.LoadJWT() // Load both jwt and refresh token
+		if err != nil {
+			return "", err
+		}
+	}
+	if jm.RefreshToken == "" {
+		return "", nil // No refresh token yet
+	}
+	return jm.RefreshToken, nil
+}
+
+// IsJWTValid checks if the current JWT token is valid, including signature verification.
 func (jm *JWTManager) IsJWTValid() (bool, error) {
 	if jm.Token == "" {
 		return false, nil
 	}
 
-	// Split the token into its three parts: header, payload, and signature.
-	parts := strings.Split(jm.Token, ".")
-	if len(parts) != 3 {
-		return false, errors.New("invalid JWT token format")
-	}
-
-	// Decode and parse the payload (claims).
-	payload, err := jwtDecodeBase64(parts[1])
+	token, err := jm.ValidateJWT(jm.Token)
 	if err != nil {
-		return false, errors.New("failed to decode JWT payload: " + err.Error())
+		return false, nil // Invalid tokens are considered expired/invalid, not an error
 	}
 
-	var claims map[string]interface{}
-	if err := json.Unmarshal([]byte(payload), &claims); err != nil {
-		return false, errors.New("failed to parse JWT claims: " + err.Error())
+	// Check expiration
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return false, errors.New("invalid JWT claims format")
 	}
 
-	// Check for expiration claim.
 	exp, ok := claims["exp"].(float64)
 	if !ok {
 		return false, errors.New("JWT expiration (exp) claim missing or invalid")
@@ -127,4 +219,39 @@ func (jm *JWTManager) IsJWTValid() (bool, error) {
 	}
 
 	return true, nil
+}
+
+// ValidateJWT checks the given JWT token for validity and signature.
+func (jm *JWTManager) ValidateJWT(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method: " + token.Header["alg"].(string))
+		}
+		return jm.Secret, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !token.Valid {
+		return nil, errors.New("invalid JWT token")
+	}
+
+	return token, nil
+}
+
+// encryptTokenData serializes and encrypts the token data for storage.
+func (jm *JWTManager) encryptTokenData(tokens tokenData) ([]byte, error) {
+	data, err := json.Marshal(tokens)
+	if err != nil {
+		return nil, errors.New("failed to serialize token data: " + err.Error())
+	}
+
+	encryptedData, err := jm.EncryptionManager.Encrypt(data)
+	if err != nil {
+		return nil, errors.New("failed to encrypt token data: " + err.Error())
+	}
+
+	return encryptedData, nil
 }

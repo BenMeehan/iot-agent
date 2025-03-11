@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/benmeehan/iot-agent/internal/middleware"
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
@@ -95,30 +96,49 @@ func (sr *ServiceRegistry) StopServices() error {
 
 // RegisterServices initializes and registers enabled services based on configuration.
 func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface) error {
+
+	registeredServices := []string{}
+
+	// Start Registration Service First
+	// Registration service is required for other services to function
+	// This is because it provides the JWT token required for MQTT communication
+	if config.Services.Registration.Enabled {
+		sr.Logger.Info().Msg("Initializing Registration Service first...")
+
+		registrationService := services.NewRegistrationService(
+			config.Services.Registration.Topic,
+			config.MQTT.ClientID,
+			config.Services.Registration.QOS,
+			config.Services.Registration.MaxBackoffSeconds,
+			deviceInfo,
+			sr.mqttClient,
+			sr.fileClient,
+			sr.jwtManager,
+			sr.encryptionManager,
+			sr.Logger,
+		)
+
+		sr.RegisterService("registration", registrationService)
+
+		if err := registrationService.Start(); err != nil {
+			sr.Logger.Error().Err(err).Msg("Failed to start Registration Service")
+			return err
+		}
+		registeredServices = append(registeredServices, "registration")
+	}
+
+	// Initialize Middleware/ Wrappers
+	sr.Logger.Info().Msg("Initializing new MQTT wrapper...")
+
+	registrationService, _ := sr.services["registration"].(*services.RegistrationService)
+	mqttWrapper := middleware.NewMQTTMiddleware(sr.mqttClient, sr.jwtManager, registrationService, deviceInfo, sr.Logger)
+
 	// Ordered service definitions with inline constructors
 	servicesInOrder := []struct {
 		name        string
 		enabled     bool
 		constructor func() (Service, error)
 	}{
-		{
-			name:    "registration",
-			enabled: config.Services.Registration.Enabled,
-			constructor: func() (Service, error) {
-				return services.NewRegistrationService(
-					config.Services.Registration.Topic,
-					config.MQTT.ClientID,
-					config.Services.Registration.QOS,
-					config.Services.Registration.MaxBackoffSeconds,
-					deviceInfo,
-					sr.mqttClient,
-					sr.fileClient,
-					sr.jwtManager,
-					sr.encryptionManager,
-					sr.Logger,
-				), nil
-			},
-		},
 		{
 			name:    "heartbeat",
 			enabled: config.Services.Heartbeat.Enabled,
@@ -128,8 +148,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					time.Duration(config.Services.Heartbeat.Interval)*time.Second,
 					config.Services.Heartbeat.QOS,
 					deviceInfo,
-					sr.mqttClient,
-					sr.jwtManager,
+					mqttWrapper,
 					sr.Logger,
 				), nil
 			},
@@ -145,9 +164,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					time.Duration(config.Services.Metrics.Timeout)*time.Second,
 					deviceInfo,
 					config.Services.Metrics.QOS,
-					sr.mqttClient,
+					mqttWrapper,
 					sr.fileClient,
-					sr.jwtManager,
 					sr.Logger,
 				), nil
 			},
@@ -161,10 +179,9 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Command.QOS,
 					config.Services.Command.OutputSizeLimit,
 					config.Services.Command.MaxExecutionTime,
-					sr.mqttClient,
+					mqttWrapper,
 					deviceInfo,
 					sr.encryptionManager,
-					sr.jwtManager,
 					sr.Logger,
 				), nil
 			},
@@ -235,7 +252,6 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 	}
 
 	// Register services in the predefined order
-	registeredServices := []string{}
 	for _, svc := range servicesInOrder {
 		if svc.enabled {
 			serviceInstance, err := svc.constructor()

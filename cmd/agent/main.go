@@ -88,13 +88,18 @@ func main() {
 
 	// Initialize encryption manager
 	encryptionManager := encryption.NewEncryptionManager(fileClient)
-	if err := encryptionManager.Initialize(config.Security.AESKeyFile); err != nil {
+	if err := encryptionManager.Initialize(config.Security.AESKeyFile, config.Security.HMACKeyFile); err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize encryption manager")
 	}
 	log.Info().Msg("Encryption manager initialized successfully")
 
 	// Initialize JWT manager
 	jwtManager := jwt.NewJWTManager(config.Security.JWTFile, fileClient, encryptionManager)
+	if err := jwtManager.Initialize(config.Security.JWTSecretFile); err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize JWT manager")
+	}
+
+	// Load JWT
 	if err := jwtManager.LoadJWT(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to load JWT")
 	}

@@ -13,7 +13,6 @@ import (
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
@@ -29,10 +28,9 @@ type MetricsService struct {
 	qos               int
 
 	// Dependencies
-	mqttClient mqtt.MQTTClient
+	mqttClient mqtt.Wrapper
 	fileClient file.FileOperations
 	deviceInfo identity.DeviceInfoInterface
-	jwtManager jwt.JWTManagerInterface
 	logger     zerolog.Logger
 
 	// Workers and registry
@@ -51,9 +49,8 @@ func NewMetricsService(
 	interval, timeout time.Duration,
 	deviceInfo identity.DeviceInfoInterface,
 	qos int,
-	mqttClient mqtt.MQTTClient,
+	mqttClient mqtt.Wrapper,
 	fileClient file.FileOperations,
-	jwtManager jwt.JWTManagerInterface,
 	logger zerolog.Logger,
 ) *MetricsService {
 	service := &MetricsService{
@@ -68,7 +65,6 @@ func NewMetricsService(
 		mqttClient: mqttClient,
 		fileClient: fileClient,
 		deviceInfo: deviceInfo,
-		jwtManager: jwtManager,
 		logger:     logger,
 
 		// Initialize supporting components
@@ -251,8 +247,6 @@ func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 
 // publishMetrics add JWT to the message and sends collected metrics via MQTT.
 func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
-	metrics.JWTToken = m.jwtManager.GetJWT()
-
 	metricsData, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to serialize metrics: %w", err)
@@ -260,7 +254,13 @@ func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
 
 	retries := 3
 	for i := 0; i < retries; i++ {
-		token := m.mqttClient.Publish(m.pubTopic, byte(m.qos), false, metricsData)
+		token, err := m.mqttClient.MQTTPublish(m.pubTopic, byte(m.qos), false, metricsData)
+		if err != nil {
+			m.logger.Warn().Err(token.Error()).Int("retry", i+1).Msg("Retrying to publish metrics...")
+			time.Sleep(time.Duration(i+1) * time.Second)
+			continue
+		}
+
 		if token.Wait() && token.Error() == nil {
 			m.logger.Debug().Msg("Metrics published successfully")
 			return nil

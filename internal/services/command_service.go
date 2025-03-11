@@ -14,7 +14,6 @@ import (
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
@@ -30,10 +29,9 @@ type CommandService struct {
 	maxExecutionTime time.Duration
 
 	// Dependencies
-	mqttClient        mqtt.MQTTClient
+	mqttClient        mqtt.Wrapper
 	deviceInfo        identity.DeviceInfoInterface
 	encryptionManager encryption.EncryptionManagerInterface
-	jwtManager        jwt.JWTManagerInterface
 	logger            zerolog.Logger
 
 	// Internal state management
@@ -47,8 +45,8 @@ type CommandService struct {
 }
 
 // NewCommandService initializes a new CommandService with given parameters.
-func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime int, mqttClient mqtt.MQTTClient, deviceInfo identity.DeviceInfoInterface,
-	encryptionManager encryption.EncryptionManagerInterface, jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *CommandService {
+func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime int, mqttClient mqtt.Wrapper, deviceInfo identity.DeviceInfoInterface,
+	encryptionManager encryption.EncryptionManagerInterface, logger zerolog.Logger) *CommandService {
 
 	if outputSizeLimit == 0 {
 		outputSizeLimit = constants.DefaultOutputSizeLimit
@@ -67,7 +65,6 @@ func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime i
 		mqttClient:        mqttClient,
 		deviceInfo:        deviceInfo,
 		encryptionManager: encryptionManager,
-		jwtManager:        jwtManager,
 		logger:            logger,
 		stopChan:          make(chan struct{}),
 		ctx:               ctx,
@@ -80,7 +77,7 @@ func (cs *CommandService) Start() error {
 	topic := cs.subTopic + "/" + cs.deviceInfo.GetDeviceID()
 	cs.logger.Info().Str("topic", topic).Msg("Starting CommandService and subscribing to MQTT topic")
 
-	token := cs.mqttClient.Subscribe(topic, byte(cs.qos), cs.HandleCommand)
+	token := cs.mqttClient.MQTTSubscribe(topic, byte(cs.qos), cs.HandleCommand)
 	token.Wait()
 	if err := token.Error(); err != nil {
 		cs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to subscribe to MQTT topic")
@@ -98,7 +95,7 @@ func (cs *CommandService) Stop() error {
 	cs.wg.Wait()
 
 	topic := cs.subTopic + "/" + cs.deviceInfo.GetDeviceID()
-	token := cs.mqttClient.Unsubscribe(topic)
+	token := cs.mqttClient.MQTTUnsubscribe(topic)
 	token.Wait()
 	if err := token.Error(); err != nil {
 		cs.logger.Error().Err(err).Str("topic", topic).Msg("Failed to unsubscribe from MQTT topic")
@@ -160,7 +157,6 @@ func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
 		UserID:   request.UserID,
 		DeviceID: cs.deviceInfo.GetDeviceID(),
 		Response: base64.StdEncoding.EncodeToString(encryptedOutput),
-		JWTToken: cs.jwtManager.GetJWT(),
 	}
 
 	if err := cs.publishOutput(cmdResponse); err != nil {
@@ -239,7 +235,12 @@ func (cs *CommandService) publishOutput(cmdResponse *models.CmdResponse) error {
 		return err
 	}
 
-	token := cs.mqttClient.Publish(topic, byte(cs.qos), false, []byte(cmdOutputJSON))
+	token, err := cs.mqttClient.MQTTPublish(topic, byte(cs.qos), false, []byte(cmdOutputJSON))
+	if err != nil {
+		cs.logger.Error().Err(err).Msg("Failed to publish command output")
+		return err
+	}
+
 	select {
 	case <-token.Done():
 		if err := token.Error(); err != nil {

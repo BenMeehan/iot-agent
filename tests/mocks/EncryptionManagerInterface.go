@@ -69,6 +69,54 @@ func (_m *EncryptionManagerInterface) Encrypt(plaintext []byte) ([]byte, error) 
 	return r0, r1
 }
 
+// SignPayload provides a mock function with given fields: payload
+func (_m *EncryptionManagerInterface) SignPayload(payload []byte) ([]byte, error) {
+	ret := _m.Called(payload)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SignPayload")
+	}
+
+	var r0 []byte
+	var r1 error
+	if rf, ok := ret.Get(0).(func([]byte) ([]byte, error)); ok {
+		return rf(payload)
+	}
+	if rf, ok := ret.Get(0).(func([]byte) []byte); ok {
+		r0 = rf(payload)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]byte)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func([]byte) error); ok {
+		r1 = rf(payload)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// VerifyPayloadSignature provides a mock function with given fields: signedPayload
+func (_m *EncryptionManagerInterface) VerifyPayloadSignature(signedPayload []byte) bool {
+	ret := _m.Called(signedPayload)
+
+	if len(ret) == 0 {
+		panic("no return value specified for VerifyPayloadSignature")
+	}
+
+	var r0 bool
+	if rf, ok := ret.Get(0).(func([]byte) bool); ok {
+		r0 = rf(signedPayload)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	return r0
+}
+
 // NewEncryptionManagerInterface creates a new instance of EncryptionManagerInterface. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewEncryptionManagerInterface(t interface {

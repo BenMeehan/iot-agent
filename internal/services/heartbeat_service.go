@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
@@ -24,8 +22,7 @@ type HeartbeatService struct {
 
 	// Dependencies
 	deviceInfo identity.DeviceInfoInterface
-	mqttClient mqtt.MQTTClient
-	jwtManager jwt.JWTManagerInterface
+	mqttClient mqtt.Wrapper
 	logger     zerolog.Logger
 
 	// Internal state management
@@ -36,8 +33,8 @@ type HeartbeatService struct {
 
 // newHeartbeatService initializes a new HeartbeatService.
 func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
-	deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
-	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *HeartbeatService {
+	deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.Wrapper,
+	logger zerolog.Logger) *HeartbeatService {
 
 	return &HeartbeatService{
 		pubTopic:   pubTopic,
@@ -45,7 +42,6 @@ func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
 		qos:        qos,
 		deviceInfo: deviceInfo,
 		mqttClient: mqttClient,
-		jwtManager: jwtManager,
 		logger:     logger,
 	}
 }
@@ -98,16 +94,13 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				DeviceID:  h.deviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
 				Status:    constants.StatusAlive,
-				JWTToken:  h.jwtManager.GetJWT(),
 			}
 
-			payload, err := json.Marshal(heartbeatMessage)
+			token, err := h.mqttClient.MQTTPublish(h.pubTopic, byte(h.qos), false, heartbeatMessage)
 			if err != nil {
-				h.logger.Error().Err(err).Msg("Failed to serialize heartbeat message")
+				h.logger.Error().Err(err).Msg("Failed to publish heartbeat message")
 				continue
 			}
-
-			token := h.mqttClient.Publish(h.pubTopic, byte(h.qos), false, payload)
 			token.Wait()
 
 			if err := token.Error(); err != nil {

@@ -84,8 +84,10 @@ type Config struct {
 	} `yaml:"services"`
 
 	Security struct {
-		JWTFile    string `yaml:"jwt_file"`     // Path to the JWT token file
-		AESKeyFile string `yaml:"aes_key_file"` // Path to the AES key file
+		JWTFile       string `yaml:"jwt_file"`        // Path to the JWT token file
+		AESKeyFile    string `yaml:"aes_key_file"`    // Path to the AES key file
+		HMACKeyFile   string `yaml:"hmac_key_file"`   // Path to the HMAC key file
+		JWTSecretFile string `yaml:"jwt_secret_file"` // Path to the JWT secret file
 	}
 }
 

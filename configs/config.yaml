@@ -9,6 +9,8 @@ identity:
 security:
   jwt_file: "secrets/jwt.bin"
   aes_key_file: "secrets/aes_key"
+  hmac_key_file: "secrets/hmac_key"
+  jwt_secret_file: "secrets/jwt_secret"
 
 services:
   registration:

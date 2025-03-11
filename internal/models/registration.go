@@ -27,4 +27,10 @@ type RegistrationResponse struct {
 
 	// JWTToken is the JSON Web Token provided for the device to authenticate future requests.
 	JWTToken string `json:"jwt_token"`
+
+	// RefreshToken is the token used to refresh the JWTToken.
+	RefreshToken string `json:"refresh_token"`
+
+	// ExpiresIn is the duration in seconds for which the JWTToken is valid.
+	ExpiresIn int `json:"expires_in"`
 }

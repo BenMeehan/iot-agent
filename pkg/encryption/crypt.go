@@ -10,26 +10,32 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/file"
 )
 
-// EncryptionManagerInterface defines encryption and decryption methods.
+// EncryptionManagerInterface defines encryption, decryption, and signing methods.
 type EncryptionManagerInterface interface {
 	Encrypt(plaintext []byte) ([]byte, error)
 	Decrypt(ciphertext []byte) ([]byte, error)
+	SignPayload(payload []byte) ([]byte, error)
+	VerifyPayloadSignature(signedPayload []byte) bool
 }
 
-// EncryptionManager implements AES-GCM encryption.
+// EncryptionManager implements AES-GCM encryption and HMAC-SHA256 signing.
 type EncryptionManager struct {
 	key        []byte
+	signingKey []byte
 	fileClient file.FileOperations
 	aesgcm     cipher.AEAD
 }
 
 // NewEncryptionManager creates a new EncryptionManager instance.
 func NewEncryptionManager(fileClient file.FileOperations) *EncryptionManager {
-	return &EncryptionManager{fileClient: fileClient}
+	return &EncryptionManager{
+		fileClient: fileClient,
+	}
 }
 
-// Initialize loads and caches the AES key and cipher.
-func (a *EncryptionManager) Initialize(AESKeyPath string) error {
+// Initialize loads and caches the AES encryption key and HMAC signing key.
+func (a *EncryptionManager) Initialize(AESKeyPath, HMACKeyPath string) error {
+	// Load AES key
 	key, err := a.fileClient.ReadFileRaw(AESKeyPath)
 	if err != nil || len(key) == 0 {
 		return fmt.Errorf("failed to read or validate AES key: %w", err)
@@ -40,7 +46,7 @@ func (a *EncryptionManager) Initialize(AESKeyPath string) error {
 	}
 	a.key = key
 
-	// Cache AES-GCM object
+	// Initialize AES-GCM
 	block, err := aes.NewCipher(a.key)
 	if err != nil {
 		return fmt.Errorf("failed to create AES cipher block: %w", err)
@@ -50,6 +56,13 @@ func (a *EncryptionManager) Initialize(AESKeyPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create AES-GCM: %w", err)
 	}
+
+	// Load signing key
+	signingKey, err := a.fileClient.ReadFileRaw(HMACKeyPath)
+	if err != nil || len(signingKey) == 0 {
+		return fmt.Errorf("failed to read or validate signing key: %w", err)
+	}
+	a.signingKey = signingKey
 
 	return nil
 }
