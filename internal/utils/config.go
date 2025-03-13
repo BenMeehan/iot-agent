@@ -84,9 +84,19 @@ type Config struct {
 	} `yaml:"services"`
 
 	Security struct {
-		JWTFile    string `yaml:"jwt_file"`     // Path to the JWT token file
-		AESKeyFile string `yaml:"aes_key_file"` // Path to the AES key file
+		JWTFile       string `yaml:"jwt_file"`        // Path to the JWT token file
+		JWTSecretFile string `yaml:"jwt_secret_file"` // Path to the JWT secret file
+		AESKeyFile    string `yaml:"aes_key_file"`    // Path to the AES key file
 	}
+
+	Middlewares struct {
+		Authentication struct {
+			Topic                     string `yaml:"topic"`                      // MQTT topic for authentication middleware
+			QOS                       int    `yaml:"qos"`                        // MQTT QoS level for authentication messages
+			RetryDelay                int    `yaml:"retry_delay"`                // Delay between retries (in seconds)
+			AuthenticationCertificate string `yaml:"authentication_certificate"` // Path to the authentication certificate
+		} `yaml:"authentication"`
+	} `yaml:"middlewares"`
 }
 
 // LoadConfig loads the YAML configuration from the specified file.

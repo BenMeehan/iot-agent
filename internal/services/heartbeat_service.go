@@ -91,6 +91,8 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 	ticker := time.NewTicker(h.interval)
 	defer ticker.Stop()
 
+	jwtToken := h.jwtManager.GetJWT()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -98,7 +100,7 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				DeviceID:  h.deviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
 				Status:    constants.StatusAlive,
-				JWTToken:  h.jwtManager.GetJWT(),
+				JWTToken:  jwtToken,
 			}
 
 			payload, err := json.Marshal(heartbeatMessage)

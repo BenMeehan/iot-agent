@@ -156,11 +156,13 @@ func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
+	jwtToken := cs.jwtManager.GetJWT()
+
 	cmdResponse := &models.CmdResponse{
 		UserID:   request.UserID,
 		DeviceID: cs.deviceInfo.GetDeviceID(),
 		Response: base64.StdEncoding.EncodeToString(encryptedOutput),
-		JWTToken: cs.jwtManager.GetJWT(),
+		JWTToken: jwtToken,
 	}
 
 	if err := cs.publishOutput(cmdResponse); err != nil {
