@@ -5,10 +5,10 @@ import (
 	"errors"
 	"time"
 
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/location"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
 
@@ -18,7 +18,7 @@ type LocationService struct {
 	Interval         time.Duration
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
-	MqttClient       mqtt.MQTTClient
+	mqttMiddleware   mqtt_middleware.MQTTMiddleware
 	Logger           zerolog.Logger
 	LocationProvider location.Provider
 	stopChan         chan struct{}
@@ -27,14 +27,14 @@ type LocationService struct {
 
 // NewLocationService creates and returns a new instance of LocationService.
 func NewLocationService(pubTopic string, interval time.Duration, deviceInfo identity.DeviceInfoInterface,
-	qos int, mqttClient mqtt.MQTTClient, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
+	qos int, mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
 
 	return &LocationService{
 		PubTopic:         pubTopic,
 		Interval:         interval,
 		DeviceInfo:       deviceInfo,
 		QOS:              qos,
-		MqttClient:       mqttClient,
+		mqttMiddleware:   mqttMiddleware,
 		Logger:           logger,
 		LocationProvider: locationProvider,
 		stopChan:         make(chan struct{}),
@@ -115,10 +115,10 @@ func (l *LocationService) publishCurrentLocation() error {
 	}
 
 	// Publish the location message to the MQTT topic
-	token := l.MqttClient.Publish(l.PubTopic, byte(l.QOS), false, payload)
-	if token.Wait() && token.Error() != nil {
-		l.Logger.Error().Err(token.Error()).Msg("Failed to publish location message to MQTT")
-		return token.Error()
+	err = l.mqttMiddleware.Publish(l.PubTopic, byte(l.QOS), false, payload)
+	if err != nil {
+		l.Logger.Error().Err(err).Msg("Failed to publish location message to MQTT")
+		return err
 	}
 
 	l.Logger.Info().Interface("message", locationMessage).Msg("Location published successfully")

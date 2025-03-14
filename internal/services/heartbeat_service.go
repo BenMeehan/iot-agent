@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/jwt"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
 
@@ -23,10 +22,9 @@ type HeartbeatService struct {
 	qos      int
 
 	// Dependencies
-	deviceInfo identity.DeviceInfoInterface
-	mqttClient mqtt.MQTTClient
-	jwtManager jwt.JWTManagerInterface
-	logger     zerolog.Logger
+	deviceInfo     identity.DeviceInfoInterface
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
+	logger         zerolog.Logger
 
 	// Internal state management
 	ctx    context.Context
@@ -36,17 +34,15 @@ type HeartbeatService struct {
 
 // newHeartbeatService initializes a new HeartbeatService.
 func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
-	deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
-	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *HeartbeatService {
+	deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger) *HeartbeatService {
 
 	return &HeartbeatService{
-		pubTopic:   pubTopic,
-		interval:   interval,
-		qos:        qos,
-		deviceInfo: deviceInfo,
-		mqttClient: mqttClient,
-		jwtManager: jwtManager,
-		logger:     logger,
+		pubTopic:       pubTopic,
+		interval:       interval,
+		qos:            qos,
+		deviceInfo:     deviceInfo,
+		mqttMiddleware: mqttMiddleware,
+		logger:         logger,
 	}
 }
 
@@ -91,8 +87,6 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 	ticker := time.NewTicker(h.interval)
 	defer ticker.Stop()
 
-	jwtToken := h.jwtManager.GetJWT()
-
 	for {
 		select {
 		case <-ticker.C:
@@ -100,7 +94,6 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				DeviceID:  h.deviceInfo.GetDeviceID(),
 				Timestamp: time.Now(),
 				Status:    constants.StatusAlive,
-				JWTToken:  jwtToken,
 			}
 
 			payload, err := json.Marshal(heartbeatMessage)
@@ -109,10 +102,8 @@ func (h *HeartbeatService) runHeartbeatLoop() {
 				continue
 			}
 
-			token := h.mqttClient.Publish(h.pubTopic, byte(h.qos), false, payload)
-			token.Wait()
-
-			if err := token.Error(); err != nil {
+			err = h.mqttMiddleware.Publish(h.pubTopic, byte(h.qos), false, payload)
+			if err != nil {
 				h.logger.Error().Err(err).Msg("Failed to publish heartbeat message")
 			} else {
 				h.logger.Debug().Msg("Heartbeat published successfully")

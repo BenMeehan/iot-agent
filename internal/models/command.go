@@ -12,5 +12,4 @@ type CmdResponse struct {
 	UserID   string `json:"user_id"`   // The ID of the user who triggered the command.
 	DeviceID string `json:"device_id"` // The current device ID sending the response.
 	Response string `json:"output"`    // The result/output of the executed command.
-	JWTToken string `json:"jwt_token"` //  JWT token for secure communication.
 }
