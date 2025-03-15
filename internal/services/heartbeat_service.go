@@ -23,7 +23,7 @@ type HeartbeatService struct {
 
 	// Dependencies
 	deviceInfo     identity.DeviceInfoInterface
-	mqttMiddleware mqtt_middleware.MQTTMiddleware
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
 	logger         zerolog.Logger
 
 	// Internal state management
@@ -34,7 +34,7 @@ type HeartbeatService struct {
 
 // newHeartbeatService initializes a new HeartbeatService.
 func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
-	deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger) *HeartbeatService {
+	deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger) *HeartbeatService {
 
 	return &HeartbeatService{
 		pubTopic:       pubTopic,

@@ -1,0 +1,16 @@
+graph TD;
+    A[Start CommandService] --> B[Subscribe to MQTT Topic];
+    B --> C[Wait for Incoming Command];
+    C -- New Command Received --> D[Parse Command Request];
+    D -- Valid Request --> E[Execute Shell Command];
+    D -- Invalid Request --> F[Log Error & Discard];
+
+    E -- Success --> G[Truncate Output if Needed];
+    E -- Error --> H[Log Error & Prepare Error Message];
+
+    G --> I[Publish Output to MQTT Response Topic];
+    H --> I;
+    
+    I --> C;  %% Loop back to wait for the next command
+    C -- Stop Request Received --> J[Unsubscribe from MQTT];
+    J --> K[Gracefully Shutdown & Cleanup];

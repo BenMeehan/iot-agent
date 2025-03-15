@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
+	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
@@ -16,16 +17,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// AuthResponse represents the expected structure of the authentication response.
-type AuthResponse struct {
-	JWT          string `json:"jwt"`
-	RefreshToken string `json:"refresh_token"`
-}
-
-// WrappedPayload represents the final structure sent over MQTT.
-type WrappedPayload struct {
-	JWT     string      `json:"jwt"`
-	Payload interface{} `json:"payload"`
+// MQTTAuthMiddleware defines a generic MQTT middleware contract.
+type MQTTAuthMiddleware interface {
+	Init(authenticationCertificatePath string) error
+	Publish(topic string, qos byte, retained bool, payload interface{}) error
+	Subscribe(topic string, qos byte, callback mqttLib.MessageHandler) error
+	Unsubscribe(topics ...string) error
 }
 
 // MQTTAuthenticationMiddleware handles authentication for MQTT operations.
@@ -42,7 +39,8 @@ type MQTTAuthenticationMiddleware struct {
 	logger     zerolog.Logger
 
 	// Retry settings
-	retryDelay time.Duration
+	retryDelay         time.Duration
+	requestWaitingTime time.Duration
 
 	// Synchronization
 	jwtMutex      sync.Mutex // Protects JWT refresh
@@ -58,16 +56,18 @@ func NewMQTTAuthenticationMiddleware(
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
 	retryDelay int,
+	requestWaitingTime int,
 ) *MQTTAuthenticationMiddleware {
 	return &MQTTAuthenticationMiddleware{
-		authTopic:     authTopic,
-		qos:           qos,
-		retryDelay:    time.Duration(retryDelay) * time.Second,
-		mqttClient:    mqttClient,
-		jwtManager:    jwtManager,
-		fileClient:    fileClient,
-		logger:        logger,
-		refreshingJWT: false,
+		authTopic:          authTopic,
+		qos:                qos,
+		retryDelay:         time.Duration(retryDelay) * time.Second,
+		requestWaitingTime: time.Duration(requestWaitingTime) * time.Second,
+		mqttClient:         mqttClient,
+		jwtManager:         jwtManager,
+		fileClient:         fileClient,
+		logger:             logger,
+		refreshingJWT:      false,
 	}
 }
 
@@ -100,7 +100,7 @@ func (m *MQTTAuthenticationMiddleware) Init(authenticationCertificatePath string
 // onAuthMessage handles authentication responses from the MQTT broker.
 func (m *MQTTAuthenticationMiddleware) onAuthMessage(msg mqttLib.Message) error {
 	m.logger.Info().Str("topic", msg.Topic()).Msg("Received authentication response")
-	var authResponse AuthResponse
+	var authResponse models.AuthResponse
 	if err := json.Unmarshal(msg.Payload(), &authResponse); err != nil {
 		m.logger.Error().Err(err).Msg("Failed to parse authentication response")
 		return err
@@ -142,7 +142,13 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 			if err := m.Subscribe(authResponseTopic, byte(m.qos), handler); err != nil {
 				return fmt.Errorf("failed to subscribe for auth response: %w", err)
 			}
-			defer m.Unsubscribe(authResponseTopic)
+
+			defer func() {
+				if err := m.Unsubscribe(authResponseTopic); err != nil {
+					m.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s:", authResponseTopic)
+				}
+			}()
+
 			m.logger.Info().Str("topic", m.authTopic).Msg("Publishing authentication request with certificate")
 			token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
 			token.Wait()
@@ -215,7 +221,13 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 				if err := m.Subscribe(authResponseTopic, byte(m.qos), handler); err != nil {
 					return fmt.Errorf("failed to subscribe for refresh response: %w", err)
 				}
-				defer m.Unsubscribe(authResponseTopic)
+
+				defer func() {
+					if err := m.Unsubscribe(authResponseTopic); err != nil {
+						m.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s:", authResponseTopic)
+					}
+				}()
+
 				m.logger.Info().Str("topic", m.authTopic).Msg("Publishing token refresh request")
 				token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
 				token.Wait()
@@ -267,7 +279,7 @@ func (m *MQTTAuthenticationMiddleware) Publish(topic string, qos byte, retained 
 	if err != nil {
 		return fmt.Errorf("failed JWT validation: %w", err)
 	}
-	wrappedPayload := WrappedPayload{
+	wrappedPayload := models.WrappedPayload{
 		JWT:     jwtToken,
 		Payload: payload,
 	}

@@ -18,7 +18,7 @@ type LocationService struct {
 	Interval         time.Duration
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
-	mqttMiddleware   mqtt_middleware.MQTTMiddleware
+	mqttMiddleware   mqtt_middleware.MQTTAuthMiddleware
 	Logger           zerolog.Logger
 	LocationProvider location.Provider
 	stopChan         chan struct{}
@@ -27,7 +27,7 @@ type LocationService struct {
 
 // NewLocationService creates and returns a new instance of LocationService.
 func NewLocationService(pubTopic string, interval time.Duration, deviceInfo identity.DeviceInfoInterface,
-	qos int, mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
+	qos int, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
 
 	return &LocationService{
 		PubTopic:         pubTopic,

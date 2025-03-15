@@ -104,7 +104,7 @@ func main() {
 	// Initialize middlewares
 	mqttAuthMiddleware := mqtt_middleware.NewMQTTAuthenticationMiddleware(config.Middlewares.Authentication.Topic,
 		config.Middlewares.Authentication.QOS, mqttClient, jwtManager, fileClient, log.Logger,
-		config.Middlewares.Authentication.RetryDelay)
+		config.Middlewares.Authentication.RetryDelay, config.Middlewares.Authentication.RequestWaitingTime)
 
 	err = mqttAuthMiddleware.Init(config.Middlewares.Authentication.AuthenticationCertificate)
 	if err != nil {

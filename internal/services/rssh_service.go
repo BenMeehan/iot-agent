@@ -23,7 +23,7 @@ import (
 // SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
 	DeviceInfo        identity.DeviceInfoInterface
-	mqttMiddleware    mqtt_middleware.MQTTMiddleware
+	mqttMiddleware    mqtt_middleware.MQTTAuthMiddleware
 	FileClient        file.FileOperations
 	Logger            zerolog.Logger
 	SubTopic          string
@@ -48,7 +48,7 @@ type SSHService struct {
 }
 
 // NewSSHService initializes a new SSHService instance.
-func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTMiddleware,
+func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
 	logger zerolog.Logger, sshUser string, privateKeyPath string,
 	fileClient file.FileOperations, qos int, maxListeners, maxSSHConnections int,
 	connectionTimeout, forwardTimeout, autoDisconnect time.Duration) *SSHService {
@@ -372,8 +372,17 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost
 	defer localConn.Close()
 
 	// Set read deadline so io.Copy doesn't block forever
-	conn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
-	localConn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	err = conn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	if err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to set remote connection deadline")
+		return
+	}
+
+	err = localConn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	if err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to set local connection deadline")
+		return
+	}
 
 	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 

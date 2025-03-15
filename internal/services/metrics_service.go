@@ -28,7 +28,7 @@ type MetricsService struct {
 	qos               int
 
 	// Dependencies
-	mqttMiddleware mqtt_middleware.MQTTMiddleware
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
 	fileClient     file.FileOperations
 	deviceInfo     identity.DeviceInfoInterface
 	logger         zerolog.Logger
@@ -49,7 +49,7 @@ func NewMetricsService(
 	interval, timeout time.Duration,
 	deviceInfo identity.DeviceInfoInterface,
 	qos int,
-	mqttMiddleware mqtt_middleware.MQTTMiddleware,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
 ) *MetricsService {
@@ -77,12 +77,30 @@ func NewMetricsService(
 	return service
 }
 
-// registerDefaultCollectors registers core system metric collectors.
+// registerDefaultCollectors registers core system metric collectors based on the configuration.
 func (m *MetricsService) registerDefaultCollectors() {
-	m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
+	if m.metricsConfig == nil {
+		m.logger.Warn().Msg("Metrics configuration not loaded yet, skipping default collector registration")
+		return
+	}
+
+	// Register collectors based on configuration flags
+	if m.metricsConfig.MonitorCPU {
+		m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered CPU metric collector")
+	}
+	if m.metricsConfig.MonitorMemory {
+		m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Memory metric collector")
+	}
+	if m.metricsConfig.MonitorDisk {
+		m.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Disk metric collector")
+	}
+	if m.metricsConfig.MonitorNetwork {
+		m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Network metric collector")
+	}
 }
 
 // Start begins periodic metrics collection and publishing.
@@ -101,6 +119,9 @@ func (m *MetricsService) Start() error {
 		return err
 	}
 	m.metricsConfig = config
+
+	// Register default collectors based on the loaded configuration
+	m.registerDefaultCollectors()
 
 	// Register process metrics collector if needed
 	if len(config.ProcessNames) > 0 {
@@ -129,7 +150,15 @@ func (m *MetricsService) Stop() error {
 	m.logger.Info().Msg("Stopping MetricsService...")
 	m.cancel()
 	m.wg.Wait()
-	m.workerPool.Shutdown()
+
+	// Shutdown the worker pool only if it hasn't been shut down already
+	if m.workerPool != nil {
+		m.workerPool.Shutdown()
+		m.workerPool = nil
+	}
+	m.ctx = nil
+	m.cancel = nil
+
 	m.logger.Info().Msg("MetricsService stopped successfully")
 	return nil
 }

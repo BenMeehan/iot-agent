@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"github.com/benmeehan/iot-agent/internal/constants"
 	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
-	"github.com/benmeehan/iot-agent/pkg/encryption"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
@@ -29,10 +27,9 @@ type CommandService struct {
 	maxExecutionTime time.Duration
 
 	// Dependencies
-	mqttMiddleware    mqtt_middleware.MQTTMiddleware
-	deviceInfo        identity.DeviceInfoInterface
-	encryptionManager encryption.EncryptionManagerInterface
-	logger            zerolog.Logger
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	deviceInfo     identity.DeviceInfoInterface
+	logger         zerolog.Logger
 
 	// Internal state management
 	stopChan chan struct{}
@@ -45,9 +42,13 @@ type CommandService struct {
 }
 
 // NewCommandService initializes a new CommandService with given parameters.
-func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime int, mqttMiddleware mqtt_middleware.MQTTMiddleware, deviceInfo identity.DeviceInfoInterface,
-	encryptionManager encryption.EncryptionManagerInterface, logger zerolog.Logger) *CommandService {
-
+func NewCommandService(
+	subTopic string,
+	qos, outputSizeLimit, maxExecutionTime int,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
+	deviceInfo identity.DeviceInfoInterface,
+	logger zerolog.Logger,
+) *CommandService {
 	if outputSizeLimit == 0 {
 		outputSizeLimit = constants.DefaultOutputSizeLimit
 	}
@@ -58,17 +59,16 @@ func NewCommandService(subTopic string, qos, outputSizeLimit, maxExecutionTime i
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &CommandService{
-		subTopic:          subTopic,
-		qos:               qos,
-		outputSizeLimit:   outputSizeLimit,
-		maxExecutionTime:  time.Duration(maxExecutionTime) * time.Second,
-		mqttMiddleware:    mqttMiddleware,
-		deviceInfo:        deviceInfo,
-		encryptionManager: encryptionManager,
-		logger:            logger,
-		stopChan:          make(chan struct{}),
-		ctx:               ctx,
-		cancel:            cancel,
+		subTopic:         subTopic,
+		qos:              qos,
+		outputSizeLimit:  outputSizeLimit,
+		maxExecutionTime: time.Duration(maxExecutionTime) * time.Second,
+		mqttMiddleware:   mqttMiddleware,
+		deviceInfo:       deviceInfo,
+		logger:           logger,
+		stopChan:         make(chan struct{}),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 }
 
@@ -126,18 +126,12 @@ func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
-	decryptedCommand, err := cs.decryptCommand(request.Command)
-	if err != nil {
-		cs.logger.Error().Err(err).Msg("Failed to decrypt command")
-		return
-	}
-
 	cs.logger.Debug().
 		Str("topic", msg.Topic()).
-		Str("command", string(decryptedCommand)).
+		Str("command", request.Command).
 		Msg("Received command from MQTT topic")
 
-	output, err := cs.ExecuteCommand(cs.ctx, string(decryptedCommand))
+	output, err := cs.ExecuteCommand(cs.ctx, request.Command)
 	if err != nil {
 		cs.logger.Error().Err(err).Msg("Command execution failed")
 		output = fmt.Sprintf("Error executing command: %v", err)
@@ -145,19 +139,13 @@ func (cs *CommandService) HandleCommand(client MQTT.Client, msg MQTT.Message) {
 
 	output = cs.truncateOutput(output)
 
-	encryptedOutput, err := cs.encryptOutput(output)
-	if err != nil {
-		cs.logger.Error().Err(err).Msg("Failed to encrypt command output")
-		return
-	}
-
 	cmdResponse := &models.CmdResponse{
 		UserID:   request.UserID,
 		DeviceID: cs.deviceInfo.GetDeviceID(),
-		Response: base64.StdEncoding.EncodeToString(encryptedOutput),
+		Response: output,
 	}
 
-	if err := cs.publishOutput(cmdResponse); err != nil {
+	if err := cs.PublishOutput(cmdResponse); err != nil {
 		cs.logger.Error().Err(err).Msg("Failed to publish command output")
 	}
 }
@@ -171,15 +159,6 @@ func (cs *CommandService) parseCommandRequest(payload []byte) (*models.CmdReques
 	return &request, nil
 }
 
-// decryptCommand decrypts the base64 encoded command.
-func (cs *CommandService) decryptCommand(encodedCommand string) ([]byte, error) {
-	decodedCommand, err := base64.StdEncoding.DecodeString(encodedCommand)
-	if err != nil {
-		return nil, err
-	}
-	return cs.encryptionManager.Decrypt(decodedCommand)
-}
-
 // truncateOutput ensures the output does not exceed the size limit.
 func (cs *CommandService) truncateOutput(output string) string {
 	if len(output) > cs.outputSizeLimit {
@@ -187,11 +166,6 @@ func (cs *CommandService) truncateOutput(output string) string {
 		cs.logger.Warn().Int("limit", cs.outputSizeLimit).Msg("Command output truncated due to size limit")
 	}
 	return output
-}
-
-// encryptOutput encrypts the command output.
-func (cs *CommandService) encryptOutput(output string) ([]byte, error) {
-	return cs.encryptionManager.Encrypt([]byte(output))
 }
 
 // ExecuteCommand runs the given shell command and returns its output or an error.
@@ -223,7 +197,7 @@ func (cs *CommandService) ExecuteCommand(ctx context.Context, cmd string) (strin
 }
 
 // publishOutput sends the command execution result to an MQTT response topic.
-func (cs *CommandService) publishOutput(cmdResponse *models.CmdResponse) error {
+func (cs *CommandService) PublishOutput(cmdResponse *models.CmdResponse) error {
 	topic := fmt.Sprintf("%s/response", cs.subTopic)
 	cs.logger.Info().Str("topic", topic).Msg("Publishing command output to MQTT topic")
 

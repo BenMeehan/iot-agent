@@ -30,7 +30,7 @@ type UpdateService struct {
 	SubTopic         string
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
-	mqttMiddleware   mqtt_middleware.MQTTMiddleware
+	mqttMiddleware   mqtt_middleware.MQTTAuthMiddleware
 	FileClient       file.FileOperations
 	Logger           zerolog.Logger
 	StateFile        string
@@ -41,7 +41,7 @@ type UpdateService struct {
 
 // NewUpdateService creates and returns a new instance of UpdateService.
 func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
-	mqttMiddleware mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
 	stateFile string, updateFilePath string) *UpdateService {
 
 	return &UpdateService{
@@ -216,7 +216,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		u.setState(constants.UpdateStateFailure)
+		if stateErr := u.setState(constants.UpdateStateFailure); stateErr != nil {
+			u.Logger.Warn().Err(err).Msg("Failed to update status to failed")
+		}
 		u.Logger.Error().Err(err).Msg("Failed to parse update command payload")
 		return
 	}
@@ -229,7 +231,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	// Check if the version is newer
 	isNew, err := u.isNewVersion(payload.Version)
 	if err != nil {
-		u.setState(constants.UpdateStateFailure)
+		if stateErr := u.setState(constants.UpdateStateFailure); stateErr != nil {
+			u.Logger.Warn().Err(err).Msg("Failed to update status to failed")
+		}
 		u.Logger.Error().Err(err).Msg("Failed to check version")
 		return
 	}
@@ -247,7 +251,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	if err := u.downloadUpdateFile(payload.UpdateURL); err != nil {
-		u.setState(constants.UpdateStateFailure)
+		if stateErr := u.setState(constants.UpdateStateFailure); stateErr != nil {
+			u.Logger.Warn().Err(err).Msg("Failed to update status to failed")
+		}
 		u.Logger.Error().Err(err).Msg("Failed to download update file")
 		return
 	}
@@ -257,7 +263,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	if err := u.verifyAndDecryptUpdate(filepath.Join(u.UpdateFilePath, "encrypted_update.zip")); err != nil {
-		u.setState(constants.UpdateStateFailure)
+		if stateErr := u.setState(constants.UpdateStateFailure); stateErr != nil {
+			u.Logger.Warn().Err(err).Msg("Failed to update status to failed")
+		}
 		u.Logger.Error().Err(err).Msg("Failed to verify update")
 		return
 	}
@@ -270,7 +278,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	if err := u.applyUpdate(instructionFile, extractedDir); err != nil {
-		u.setState(constants.UpdateStateFailure)
+		if stateErr := u.setState(constants.UpdateStateFailure); stateErr != nil {
+			u.Logger.Warn().Err(err).Msg("Failed to update status to failed")
+		}
 		u.Logger.Error().Err(err).Msg("Failed to apply update, starting rollback")
 
 		// Rollback on failure

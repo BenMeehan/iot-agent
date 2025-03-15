@@ -20,7 +20,7 @@ import (
 type ServiceRegistry struct {
 	services           map[string]Service // Stores registered services
 	serviceKeys        []string           // Maintains order of service registration
-	mqttAuthMiddleware mqtt_middleware.MQTTMiddleware
+	mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware
 	fileClient         file.FileOperations
 	encryptionManager  encryption.EncryptionManagerInterface
 	jwtManager         jwt.JWTManagerInterface
@@ -28,7 +28,7 @@ type ServiceRegistry struct {
 }
 
 // NewServiceRegistry initializes a new service registry with dependencies.
-func NewServiceRegistry(mqttAuthMiddleware mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
+func NewServiceRegistry(mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
 	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *ServiceRegistry {
 	return &ServiceRegistry{
 		services:           make(map[string]Service),
@@ -109,6 +109,10 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Registration.Topic,
 					config.MQTT.ClientID,
 					config.Services.Registration.QOS,
+					config.Services.Registration.MaxRetries,
+					config.Services.Registration.BaseDelaySeconds,
+					config.Services.Registration.MaxBackoffSeconds,
+					config.Services.Registration.ResponseTimeout,
 					deviceInfo,
 					sr.mqttAuthMiddleware,
 					sr.fileClient,
@@ -158,7 +162,6 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Command.MaxExecutionTime,
 					sr.mqttAuthMiddleware,
 					deviceInfo,
-					sr.encryptionManager,
 					sr.Logger,
 				), nil
 			},

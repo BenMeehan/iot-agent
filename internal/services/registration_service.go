@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -20,13 +21,17 @@ import (
 // RegistrationService manages the process of registering a device with the IoT backend.
 type RegistrationService struct {
 	// Configuration fields
-	pubTopic string
-	clientID string
-	qos      int
+	pubTopic        string
+	clientID        string
+	qos             int
+	maxRetries      int
+	baseDelay       time.Duration
+	maxDelay        time.Duration
+	responseTimeout time.Duration
 
 	// Dependencies for handling device information, MQTT, file operations, and encryption
 	deviceInfo     identity.DeviceInfoInterface
-	mqttMiddleware mqtt_middleware.MQTTMiddleware
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
 	fileClient     file.FileOperations
 	logger         zerolog.Logger
 
@@ -41,19 +46,27 @@ func NewRegistrationService(
 	pubTopic string,
 	clientID string,
 	qos int,
+	maxRetries int,
+	baseDelay int,
+	maxDelay int,
+	responseTimeout int,
 	deviceInfo identity.DeviceInfoInterface,
-	mqttMiddleware mqtt_middleware.MQTTMiddleware,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
 ) *RegistrationService {
 	return &RegistrationService{
-		pubTopic:       pubTopic,
-		clientID:       clientID,
-		qos:            qos,
-		deviceInfo:     deviceInfo,
-		mqttMiddleware: mqttMiddleware,
-		fileClient:     fileClient,
-		logger:         logger,
+		pubTopic:        pubTopic,
+		clientID:        clientID,
+		qos:             qos,
+		maxRetries:      maxRetries,
+		baseDelay:       time.Duration(baseDelay) * time.Second,
+		maxDelay:        time.Duration(maxDelay) * time.Second,
+		responseTimeout: time.Duration(responseTimeout) * time.Second,
+		deviceInfo:      deviceInfo,
+		mqttMiddleware:  mqttMiddleware,
+		fileClient:      fileClient,
+		logger:          logger,
 	}
 }
 
@@ -71,11 +84,11 @@ func (rs *RegistrationService) Start() error {
 
 	rs.logger.Info().Str("client_id", rs.clientID).Msg("Starting registration process")
 
-	return rs.run()
+	return rs.Run()
 }
 
 // run initiates the registration process, excluding ClientID if DeviceID exists.
-func (rs *RegistrationService) run() error {
+func (rs *RegistrationService) Run() error {
 	existingDeviceID := rs.deviceInfo.GetDeviceID()
 
 	payload := models.RegistrationPayload{
@@ -97,7 +110,6 @@ func (rs *RegistrationService) run() error {
 
 // Register sends a registration request over MQTT and waits for a response, subscribing with DeviceID if present.
 func (rs *RegistrationService) Register(payload models.RegistrationPayload) error {
-	// Determine the response topic based on whether DeviceID is present
 	existingDeviceID := rs.deviceInfo.GetDeviceID()
 	respTopic := fmt.Sprintf("%s/response/%s", rs.pubTopic, rs.clientID)
 	if existingDeviceID != "" {
@@ -109,59 +121,84 @@ func (rs *RegistrationService) Register(payload models.RegistrationPayload) erro
 	responseChannel := make(chan string, 1)
 	defer close(responseChannel)
 
-	// Subscribe to the response topic to receive registration confirmation.
 	err := rs.mqttMiddleware.Subscribe(respTopic, byte(rs.qos), func(client MQTT.Client, msg MQTT.Message) {
 		var response models.RegistrationResponse
 		if err := json.Unmarshal(msg.Payload(), &response); err != nil {
 			rs.logger.Error().Err(err).Msg("Error parsing registration response")
 			return
 		}
-
 		if response.DeviceID == "" {
 			rs.logger.Error().Msg("Invalid registration response")
 			return
 		}
-
 		responseChannel <- response.DeviceID
 	})
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to response topic: %w", err)
 	}
 
-	// Serialize the payload (with either ClientID or DeviceID) before sending it over MQTT.
+	defer func() {
+		if err := rs.mqttMiddleware.Unsubscribe(respTopic); err != nil {
+			rs.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s:", respTopic)
+		}
+	}()
+
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		defer rs.mqttMiddleware.Unsubscribe(respTopic)
 		return fmt.Errorf("failed to serialize registration payload: %w", err)
 	}
 
-	// Publish the payload to the MQTT topic.
-	err = rs.mqttMiddleware.Publish(rs.pubTopic, byte(rs.qos), false, payloadBytes)
-	if err != nil {
-		rs.logger.Error().Err(err).Msg("Failed to publish registration message")
-		defer rs.mqttMiddleware.Unsubscribe(respTopic)
-		return err
+	if rs.ctx == nil {
+		rs.ctx = context.Background()
 	}
 
-	// Wait for a response or timeout.
-	select {
-	case deviceID := <-responseChannel:
-		rs.logger.Info().Str("device_id", deviceID).Msg("Device registered successfully")
-		defer rs.mqttMiddleware.Unsubscribe(respTopic)
-		// Save the device ID if it's different or not yet saved
-		if deviceID != rs.deviceInfo.GetDeviceID() {
-			return rs.deviceInfo.SaveDeviceID(deviceID)
+	for attempt := 0; attempt <= rs.maxRetries; attempt++ {
+		delay := rs.baseDelay * time.Duration(1<<uint(attempt))
+		if delay > rs.maxDelay {
+			delay = rs.maxDelay
 		}
-		return nil
-	case <-time.After(10 * time.Second):
-		rs.logger.Error().Str("client_id", rs.clientID).Msg("Registration timeout")
-		defer rs.mqttMiddleware.Unsubscribe(respTopic)
-		return errors.New("registration timeout")
-	case <-rs.ctx.Done():
-		rs.logger.Warn().Msg("RegistrationService stopping during registration")
-		defer rs.mqttMiddleware.Unsubscribe(respTopic)
-		return errors.New("registration service stopped")
+		jitter := time.Duration(float64(delay) * (0.5 + rand.Float64()*0.5))
+		delay = time.Duration(float64(delay)*0.75) + jitter
+
+		attemptTimeout := rs.responseTimeout + delay
+		attemptCtx, cancel := context.WithTimeout(rs.ctx, attemptTimeout)
+		defer cancel()
+
+		err = rs.mqttMiddleware.Publish(rs.pubTopic, byte(rs.qos), false, payloadBytes)
+		if err != nil {
+			rs.logger.Error().Err(err).Int("attempt", attempt+1).Msg("Failed to publish registration message")
+			if attempt == rs.maxRetries {
+				return fmt.Errorf("failed to publish after %d attempts: %w", rs.maxRetries+1, err)
+			}
+		} else {
+			select {
+			case deviceID := <-responseChannel:
+				rs.logger.Info().Str("device_id", deviceID).Int("attempt", attempt+1).Msg("Device registered successfully")
+				if deviceID != rs.deviceInfo.GetDeviceID() {
+					return rs.deviceInfo.SaveDeviceID(deviceID)
+				}
+				return nil
+			case <-attemptCtx.Done():
+				rs.logger.Warn().Int("attempt", attempt+1).Msg("Registration timeout or cancelled")
+				if attempt == rs.maxRetries {
+					return errors.New("registration timeout after maximum retries")
+				}
+				if errors.Is(attemptCtx.Err(), context.Canceled) {
+					return errors.New("registration service stopped")
+				}
+			}
+		}
+
+		select {
+		case <-time.After(delay):
+			continue
+		case <-rs.ctx.Done():
+			rs.logger.Warn().Msg("RegistrationService stopping during retry delay")
+			return errors.New("registration service stopped")
+		}
 	}
+
+	return errors.New("unexpected error: retry loop completed without resolution")
 }
 
 // Stop gracefully shuts down the registration service and unsubscribes from MQTT topics.

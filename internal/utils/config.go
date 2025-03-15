@@ -21,9 +21,12 @@ type Config struct {
 	Services struct {
 		Registration struct {
 			Topic             string `yaml:"topic"`               // MQTT topic for registration service
-			MaxBackoffSeconds int    `yaml:"max_backoff_seconds"` // Maximum backoff time for registration retries
 			Enabled           bool   `yaml:"enabled"`             // Enable/disable registration service
 			QOS               int    `yaml:"qos"`                 // MQTT QoS level for registration messages
+			MaxRetries        int    `yaml:"max_retries"`         // Maximum number of retry attempts
+			BaseDelaySeconds  int    `yaml:"base_delay_seconds"`  // Initial delay between retries
+			MaxBackoffSeconds int    `yaml:"max_backoff_seconds"` // Maximum backoff time for registration retries
+			ResponseTimeout   int    `yaml:"response_timeout"`    // Timeout for response per attempt
 		} `yaml:"registration"`
 
 		Heartbeat struct {
@@ -94,6 +97,7 @@ type Config struct {
 			Topic                     string `yaml:"topic"`                      // MQTT topic for authentication middleware
 			QOS                       int    `yaml:"qos"`                        // MQTT QoS level for authentication messages
 			RetryDelay                int    `yaml:"retry_delay"`                // Delay between retries (in seconds)
+			RequestWaitingTime        int    `yaml:"request_waiting_time"`       // Max Duration to wait for MQTT response (in seconds)
 			AuthenticationCertificate string `yaml:"authentication_certificate"` // Path to the authentication certificate
 		} `yaml:"authentication"`
 	} `yaml:"middlewares"`

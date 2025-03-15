@@ -16,13 +16,17 @@ middlewares:
     topic: "iot-authentication"
     qos: 2
     retry_delay: 60 # 1 minute
+    request_waiting_time: 60 # 1 minute
     authentication_certificate: "certs/bootstrap_authentication_cert"
 
 services:
   registration:
     topic: "iot-registration"
     qos: 2
+    max_retries: 6
+    base_delay_seconds: 2
     max_backoff_seconds: 60
+    response_timeout: 10
     enabled: true
   heartbeat:
     topic: "iot-heartbeat"
