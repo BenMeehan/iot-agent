@@ -94,11 +94,11 @@ type Config struct {
 
 	Middlewares struct {
 		Authentication struct {
-			Topic                     string `yaml:"topic"`                      // MQTT topic for authentication middleware
-			QOS                       int    `yaml:"qos"`                        // MQTT QoS level for authentication messages
-			RetryDelay                int    `yaml:"retry_delay"`                // Delay between retries (in seconds)
-			RequestWaitingTime        int    `yaml:"request_waiting_time"`       // Max Duration to wait for MQTT response (in seconds)
-			AuthenticationCertificate string `yaml:"authentication_certificate"` // Path to the authentication certificate
+			Topic              string `yaml:"topic"`                // MQTT topic for authentication middleware
+			QOS                int    `yaml:"qos"`                  // MQTT QoS level for authentication messages
+			RetryDelay         int    `yaml:"retry_delay"`          // Delay between retries (in seconds)
+			RequestWaitingTime int    `yaml:"request_waiting_time"` // Max Duration to wait for MQTT response (in seconds)
+			AuthenticationCert string `yaml:"authentication_cert"`  // Path to the authentication certificate
 		} `yaml:"authentication"`
 	} `yaml:"middlewares"`
 }

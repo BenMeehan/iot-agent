@@ -103,10 +103,10 @@ func main() {
 
 	// Initialize middlewares
 	mqttAuthMiddleware := mqtt_middleware.NewMQTTAuthenticationMiddleware(config.Middlewares.Authentication.Topic,
-		config.Middlewares.Authentication.QOS, mqttClient, jwtManager, fileClient, log.Logger,
-		config.Middlewares.Authentication.RetryDelay, config.Middlewares.Authentication.RequestWaitingTime)
+		config.Middlewares.Authentication.QOS, config.MQTT.ClientID, deviceInfo, mqttClient, jwtManager, fileClient,
+		log.Logger, config.Middlewares.Authentication.RetryDelay, config.Middlewares.Authentication.RequestWaitingTime)
 
-	err = mqttAuthMiddleware.Init(config.Middlewares.Authentication.AuthenticationCertificate)
+	err = mqttAuthMiddleware.Init(config.Middlewares.Authentication.AuthenticationCert)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize MQTT authentication middleware")
 	}

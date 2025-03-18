@@ -11,6 +11,7 @@ import (
 	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
+	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	mqttLib "github.com/eclipse/paho.mqtt.golang"
@@ -31,8 +32,10 @@ type MQTTAuthenticationMiddleware struct {
 	authTopic                 string
 	qos                       int
 	authenticationCertificate []byte
+	clientID                  string
 
 	// Dependencies
+	deviceInfo identity.DeviceInfoInterface
 	mqttClient mqtt.MQTTClient
 	jwtManager jwt.JWTManagerInterface
 	fileClient file.FileOperations
@@ -51,6 +54,8 @@ type MQTTAuthenticationMiddleware struct {
 func NewMQTTAuthenticationMiddleware(
 	authTopic string,
 	qos int,
+	clientID string,
+	deviceInfo identity.DeviceInfoInterface,
 	mqttClient mqtt.MQTTClient,
 	jwtManager jwt.JWTManagerInterface,
 	fileClient file.FileOperations,
@@ -61,8 +66,10 @@ func NewMQTTAuthenticationMiddleware(
 	return &MQTTAuthenticationMiddleware{
 		authTopic:          authTopic,
 		qos:                qos,
+		clientID:           clientID,
 		retryDelay:         time.Duration(retryDelay) * time.Second,
 		requestWaitingTime: time.Duration(requestWaitingTime) * time.Second,
+		deviceInfo:         deviceInfo,
 		mqttClient:         mqttClient,
 		jwtManager:         jwtManager,
 		fileClient:         fileClient,
@@ -105,7 +112,7 @@ func (m *MQTTAuthenticationMiddleware) onAuthMessage(msg mqttLib.Message) error 
 		m.logger.Error().Err(err).Msg("Failed to parse authentication response")
 		return err
 	}
-	if err := m.jwtManager.SaveTokens(authResponse.JWT, authResponse.RefreshToken); err != nil {
+	if err := m.jwtManager.SaveTokens(authResponse.AccessToken, authResponse.RefreshToken, authResponse.ExpiresIn); err != nil {
 		m.logger.Error().Err(err).Msg("Failed to save tokens")
 		return err
 	}
@@ -113,10 +120,16 @@ func (m *MQTTAuthenticationMiddleware) onAuthMessage(msg mqttLib.Message) error 
 	return nil
 }
 
-// waitForJWTResponse waits for a JWT response with a timeout.
-func (m *MQTTAuthenticationMiddleware) waitForJWTResponse(jwtChan chan error) error {
+// waitForJWTResponse waits for a JWT response with a timeout and unsubscribes afterward.
+func (m *MQTTAuthenticationMiddleware) waitForJWTResponse(jwtChan chan error, responseTopic string) error {
+	defer func() {
+		if err := m.Unsubscribe(responseTopic); err != nil {
+			m.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s", responseTopic)
+		}
+	}()
+
 	select {
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		return errors.New("authentication response timeout")
 	case err := <-jwtChan:
 		if err != nil {
@@ -133,21 +146,29 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 		attempt++
 		m.logger.Info().Int("attempt", attempt).Msg("Attempting to request JWT with certificate")
 		err := func() error {
-			payloadBytes := m.authenticationCertificate
+			payload := models.AuthRequest{}
+			var identifier string
+			if identifier = m.deviceInfo.GetDeviceID(); identifier != "" {
+				payload.DeviceID = identifier
+			} else {
+				payload.ClientID = m.clientID
+				identifier = m.clientID
+			}
+			payload.Key = m.authenticationCertificate
+
+			payloadBytes, err := json.Marshal(payload)
+			if err != nil {
+				return errors.New("failed to marshal authentication request")
+			}
+
 			jwtChan := make(chan error, 1)
 			handler := func(client mqttLib.Client, msg mqttLib.Message) {
 				jwtChan <- m.onAuthMessage(msg)
 			}
-			authResponseTopic := fmt.Sprintf("%s/response", m.authTopic)
+			authResponseTopic := fmt.Sprintf("%s/response/%s", m.authTopic, identifier)
 			if err := m.Subscribe(authResponseTopic, byte(m.qos), handler); err != nil {
 				return fmt.Errorf("failed to subscribe for auth response: %w", err)
 			}
-
-			defer func() {
-				if err := m.Unsubscribe(authResponseTopic); err != nil {
-					m.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s:", authResponseTopic)
-				}
-			}()
 
 			m.logger.Info().Str("topic", m.authTopic).Msg("Publishing authentication request with certificate")
 			token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
@@ -155,7 +176,7 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 			if token.Error() != nil {
 				return fmt.Errorf("failed to publish authentication request: %w", token.Error())
 			}
-			return m.waitForJWTResponse(jwtChan)
+			return m.waitForJWTResponse(jwtChan, authResponseTopic)
 		}()
 
 		if err == nil {
@@ -177,6 +198,7 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 
 // refreshJWT requests a new JWT token using either refresh token or certificate with infinite retries.
 func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
+	// Block two threads from refreshing JWT at the same time
 	m.jwtMutex.Lock()
 	if m.refreshingJWT {
 		m.jwtMutex.Unlock()
@@ -192,12 +214,8 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 		m.jwtMutex.Unlock()
 	}()
 
-	refreshToken := m.jwtManager.GetRefreshToken()
-
-	isValid, err := m.jwtManager.CheckExpiration(refreshToken, constants.RefreshToken)
-	if err != nil {
-		return fmt.Errorf("failed to validate refresh token: %w", err)
-	}
+	refreshToken, expiresIn := m.jwtManager.GetRefreshToken()
+	isValid := time.Now().Before(time.Now().Add(time.Duration(expiresIn) * time.Second))
 
 	if isValid {
 		attempt := 0
@@ -205,9 +223,9 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 			attempt++
 			m.logger.Info().Int("attempt", attempt).Msg("Attempting to refresh JWT with refresh token")
 			err := func() error {
-				authRequestPayload := map[string]string{
-					"request":      "refresh_token",
-					"refreshToken": refreshToken,
+				authRequestPayload := models.AuthRequest{
+					DeviceID:     m.deviceInfo.GetDeviceID(),
+					RefreshToken: refreshToken,
 				}
 				payloadBytes, err := json.Marshal(authRequestPayload)
 				if err != nil {
@@ -217,16 +235,10 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 				handler := func(client mqttLib.Client, msg mqttLib.Message) {
 					jwtChan <- m.onAuthMessage(msg)
 				}
-				authResponseTopic := fmt.Sprintf("%s/response", m.authTopic)
+				authResponseTopic := fmt.Sprintf("%s/response/%s", m.authTopic, m.deviceInfo.GetDeviceID())
 				if err := m.Subscribe(authResponseTopic, byte(m.qos), handler); err != nil {
 					return fmt.Errorf("failed to subscribe for refresh response: %w", err)
 				}
-
-				defer func() {
-					if err := m.Unsubscribe(authResponseTopic); err != nil {
-						m.logger.Warn().Err(err).Msgf("failed to unsubscribe from %s:", authResponseTopic)
-					}
-				}()
 
 				m.logger.Info().Str("topic", m.authTopic).Msg("Publishing token refresh request")
 				token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
@@ -234,7 +246,7 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 				if token.Error() != nil {
 					return fmt.Errorf("failed to publish refresh request: %w", token.Error())
 				}
-				return m.waitForJWTResponse(jwtChan)
+				return m.waitForJWTResponse(jwtChan, authResponseTopic)
 			}()
 
 			if err == nil {
@@ -288,14 +300,14 @@ func (m *MQTTAuthenticationMiddleware) Publish(topic string, qos byte, retained 
 		m.logger.Error().Err(err).Msg("Failed to serialize wrapped payload")
 		return fmt.Errorf("failed to serialize wrapped payload: %w", err)
 	}
-	m.logger.Info().Str("topic", topic).Msg("Publishing message with JWT")
+	m.logger.Debug().Str("topic", topic).Msg("Publishing message with JWT")
 	token := m.mqttClient.Publish(topic, qos, retained, payloadBytes)
 	token.Wait()
 	if token.Error() != nil {
 		m.logger.Error().Err(token.Error()).Msg("MQTT Publish failed")
 		return token.Error()
 	}
-	m.logger.Info().Str("topic", topic).Msg("Message published successfully")
+	m.logger.Debug().Str("topic", topic).Msg("Message published successfully")
 	return nil
 }
 
@@ -307,7 +319,7 @@ func (m *MQTTAuthenticationMiddleware) Subscribe(topic string, qos byte, callbac
 		m.logger.Error().Err(token.Error()).Msg("MQTT Subscribe failed")
 		return token.Error()
 	}
-	m.logger.Info().Str("topic", topic).Msg("Subscribed successfully")
+	m.logger.Debug().Str("topic", topic).Msg("Subscribed successfully")
 	return nil
 }
 
@@ -319,6 +331,6 @@ func (m *MQTTAuthenticationMiddleware) Unsubscribe(topics ...string) error {
 		m.logger.Error().Err(token.Error()).Msg("MQTT Unsubscribe failed")
 		return token.Error()
 	}
-	m.logger.Info().Strs("topics", topics).Msg("Unsubscribed successfully")
+	m.logger.Debug().Strs("topics", topics).Msg("Unsubscribed successfully")
 	return nil
 }

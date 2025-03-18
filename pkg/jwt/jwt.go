@@ -21,6 +21,7 @@ import (
 type TokenData struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
 }
 
 // Claims represents the standard JWT claims we expect in tokens.
@@ -32,12 +33,11 @@ type Claims struct {
 // JWTManagerInterface defines the methods to manage JWT tokens.
 type JWTManagerInterface interface {
 	LoadTokens() error
-	SaveTokens(accessToken, refreshToken string) error
+	SaveTokens(accessToken, refreshToken string, expiresIn int) error
 	GetJWT() string
 	IsJWTValid() (bool, error)
-	GetRefreshToken() string
+	GetRefreshToken() (string, int)
 	VerifySignature(secret []byte, token string) (bool, error)
-	IsRefreshTokenValid() (bool, error)
 	CheckExpiration(token, tokenType string) (bool, error)
 }
 
@@ -47,6 +47,7 @@ type JWTManager struct {
 	secret            []byte
 	accessToken       string
 	refreshToken      string
+	expiresIn         int
 	fileOps           file.FileOperations
 	encryptionManager encryption.EncryptionManagerInterface
 	mutex             sync.Mutex
@@ -86,6 +87,7 @@ func (m *JWTManager) LoadTokens() error {
 		if os.IsNotExist(err) {
 			m.accessToken = ""
 			m.refreshToken = ""
+			m.expiresIn = 0
 			return nil
 		}
 		return fmt.Errorf("failed to read token file: %w", err)
@@ -94,6 +96,7 @@ func (m *JWTManager) LoadTokens() error {
 	if len(data) == 0 {
 		m.accessToken = ""
 		m.refreshToken = ""
+		m.expiresIn = 0
 		return nil
 	}
 
@@ -131,7 +134,7 @@ func (m *JWTManager) saveToFile(tokenData TokenData) error {
 }
 
 // SaveTokens saves both access and refresh tokens after validation.
-func (m *JWTManager) SaveTokens(accessToken, refreshToken string) error {
+func (m *JWTManager) SaveTokens(accessToken, refreshToken string, expiresIn int) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -146,22 +149,13 @@ func (m *JWTManager) SaveTokens(accessToken, refreshToken string) error {
 		}
 	}
 
-	// Validate refresh token if present
-	if refreshToken != "" {
-		valid, err := m.validateToken(refreshToken, constants.RefreshToken)
-		if err != nil {
-			return fmt.Errorf("refresh token validation failed: %w", err)
-		}
-		if !valid {
-			return errors.New("refresh token is invalid or expired")
-		}
-	}
-
 	m.accessToken = accessToken
 	m.refreshToken = refreshToken
+	m.expiresIn = expiresIn
 	return m.saveToFile(TokenData{
 		AccessToken:  m.accessToken,
 		RefreshToken: m.refreshToken,
+		ExpiresIn:    m.expiresIn,
 	})
 }
 
@@ -171,8 +165,8 @@ func (m *JWTManager) GetJWT() string {
 }
 
 // GetRefreshToken retrieves the current refresh token
-func (m *JWTManager) GetRefreshToken() string {
-	return m.refreshToken
+func (m *JWTManager) GetRefreshToken() (string, int) {
+	return m.refreshToken, m.expiresIn
 }
 
 // jwtDecodeBase64 decodes a base64-encoded JWT part.
@@ -281,9 +275,4 @@ func (m *JWTManager) CheckExpiration(token, tokenType string) (bool, error) {
 // IsJWTValid checks if the current access token is valid (signature and expiration).
 func (m *JWTManager) IsJWTValid() (bool, error) {
 	return m.validateToken(m.accessToken, constants.AccessToken)
-}
-
-// IsRefreshTokenValid checks if the current refresh token is valid (signature and expiration).
-func (m *JWTManager) IsRefreshTokenValid() (bool, error) {
-	return m.validateToken(m.refreshToken, constants.RefreshToken)
 }
