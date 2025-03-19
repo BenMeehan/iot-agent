@@ -24,7 +24,4 @@ type RegistrationPayload struct {
 type RegistrationResponse struct {
 	// DeviceID is the unique identifier assigned to the device upon successful registration.
 	DeviceID string `json:"device_id"`
-
-	// JWTToken is the JSON Web Token provided for the device to authenticate future requests.
-	JWTToken string `json:"jwt_token"`
 }

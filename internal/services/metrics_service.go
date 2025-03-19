@@ -9,12 +9,11 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/metrics_collectors"
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/jwt"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
 
@@ -29,11 +28,10 @@ type MetricsService struct {
 	qos               int
 
 	// Dependencies
-	mqttClient mqtt.MQTTClient
-	fileClient file.FileOperations
-	deviceInfo identity.DeviceInfoInterface
-	jwtManager jwt.JWTManagerInterface
-	logger     zerolog.Logger
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	fileClient     file.FileOperations
+	deviceInfo     identity.DeviceInfoInterface
+	logger         zerolog.Logger
 
 	// Workers and registry
 	registry   *metrics_collectors.MetricsRegistry
@@ -51,9 +49,8 @@ func NewMetricsService(
 	interval, timeout time.Duration,
 	deviceInfo identity.DeviceInfoInterface,
 	qos int,
-	mqttClient mqtt.MQTTClient,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
 	fileClient file.FileOperations,
-	jwtManager jwt.JWTManagerInterface,
 	logger zerolog.Logger,
 ) *MetricsService {
 	service := &MetricsService{
@@ -65,11 +62,10 @@ func NewMetricsService(
 		qos:               qos,
 
 		// Inject dependencies
-		mqttClient: mqttClient,
-		fileClient: fileClient,
-		deviceInfo: deviceInfo,
-		jwtManager: jwtManager,
-		logger:     logger,
+		mqttMiddleware: mqttMiddleware,
+		fileClient:     fileClient,
+		deviceInfo:     deviceInfo,
+		logger:         logger,
 
 		// Initialize supporting components
 		registry:   metrics_collectors.NewMetricsRegistry(),
@@ -81,12 +77,30 @@ func NewMetricsService(
 	return service
 }
 
-// registerDefaultCollectors registers core system metric collectors.
+// registerDefaultCollectors registers core system metric collectors based on the configuration.
 func (m *MetricsService) registerDefaultCollectors() {
-	m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: m.logger})
-	m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
+	if m.metricsConfig == nil {
+		m.logger.Warn().Msg("Metrics configuration not loaded yet, skipping default collector registration")
+		return
+	}
+
+	// Register collectors based on configuration flags
+	if m.metricsConfig.MonitorCPU {
+		m.registry.Register(&metrics_collectors.CPUMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered CPU metric collector")
+	}
+	if m.metricsConfig.MonitorMemory {
+		m.registry.Register(&metrics_collectors.MemoryMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Memory metric collector")
+	}
+	if m.metricsConfig.MonitorDisk {
+		m.registry.Register(&metrics_collectors.DiskMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Disk metric collector")
+	}
+	if m.metricsConfig.MonitorNetwork {
+		m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Network metric collector")
+	}
 }
 
 // Start begins periodic metrics collection and publishing.
@@ -105,6 +119,9 @@ func (m *MetricsService) Start() error {
 		return err
 	}
 	m.metricsConfig = config
+
+	// Register default collectors based on the loaded configuration
+	m.registerDefaultCollectors()
 
 	// Register process metrics collector if needed
 	if len(config.ProcessNames) > 0 {
@@ -133,7 +150,15 @@ func (m *MetricsService) Stop() error {
 	m.logger.Info().Msg("Stopping MetricsService...")
 	m.cancel()
 	m.wg.Wait()
-	m.workerPool.Shutdown()
+
+	// Shutdown the worker pool only if it hasn't been shut down already
+	if m.workerPool != nil {
+		m.workerPool.Shutdown()
+		m.workerPool = nil
+	}
+	m.ctx = nil
+	m.cancel = nil
+
 	m.logger.Info().Msg("MetricsService stopped successfully")
 	return nil
 }
@@ -251,8 +276,6 @@ func (m *MetricsService) CollectMetrics() *models.SystemMetrics {
 
 // publishMetrics add JWT to the message and sends collected metrics via MQTT.
 func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
-	metrics.JWTToken = m.jwtManager.GetJWT()
-
 	metricsData, err := json.Marshal(metrics)
 	if err != nil {
 		return fmt.Errorf("failed to serialize metrics: %w", err)
@@ -260,12 +283,12 @@ func (m *MetricsService) PublishMetrics(metrics *models.SystemMetrics) error {
 
 	retries := 3
 	for i := 0; i < retries; i++ {
-		token := m.mqttClient.Publish(m.pubTopic, byte(m.qos), false, metricsData)
-		if token.Wait() && token.Error() == nil {
+		err := m.mqttMiddleware.Publish(m.pubTopic, byte(m.qos), false, metricsData)
+		if err == nil {
 			m.logger.Debug().Msg("Metrics published successfully")
 			return nil
 		}
-		m.logger.Warn().Err(token.Error()).Int("retry", i+1).Msg("Retrying to publish metrics...")
+		m.logger.Warn().Err(err).Int("retry", i+1).Msg("Retrying to publish metrics...")
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 

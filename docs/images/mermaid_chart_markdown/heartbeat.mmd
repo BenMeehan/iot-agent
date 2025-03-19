@@ -1,23 +1,33 @@
 graph TD;
-    A[Start Heartbeat Service] -->|Check if Running| B{Already Running?};
+    Start[Start Heartbeat Service] -->|Check if Running| CheckRunning
+    CheckRunning -->|Already Running| LogWarning
+    CheckRunning -->|Not Running| InitContext
+    InitContext --> LaunchGoroutine
+    LaunchGoroutine --> LogServiceStarted
+    LogServiceStarted --> HeartbeatLoop
 
-    B -- Yes --> C[Log Warning & Exit];
-    B -- No --> D[Initialize Context & Start Loop];
+    subgraph HeartbeatLoop[Heartbeat Transmission Loop]
+        WaitInterval[Wait for Interval] --> ConstructMessage
+        ConstructMessage --> SerializeMessage
+        SerializeMessage --> PublishHeartbeat
+        PublishHeartbeat -->|Success| LogSuccess
+        PublishHeartbeat -->|Failure| LogError
+        LogSuccess --> WaitInterval
+        LogError --> WaitInterval
 
-    subgraph Heartbeat Loop
-        D --> E[Create Heartbeat Message];
-        E --> F[Serialize Message to JSON];
-
-        F -- Success --> G[Publish to MQTT Topic];
-        F -- Failure --> H[Log Serialization Error];
-
-        G -- Success --> I[Log Heartbeat Sent];
-        G -- Failure --> J[Log Publish Error];
-
-        I --> K[Wait for Next Interval];
-        H --> K;
-        J --> K;
-
-        K -->|Continue Loop| E;
+        StopRequested[Stop Signal Received?] -->|No| WaitInterval
+        StopRequested -->|Yes| ExitLoop
     end
-    K -->|Stop Signal Received| L[Cleanup & Exit];
+
+    HeartbeatLoop --> StopRequested
+    ExitLoop --> LogStopping
+    LogStopping --> End[Service Stopped Successfully]
+
+    subgraph StopService[Stopping Heartbeat Service]
+        Stop[Stop Service] -->|Check if Running| CheckRunningStop
+        CheckRunningStop -->|Not Running| LogNotRunning
+        CheckRunningStop -->|Running| CancelContext
+        CancelContext --> WaitGoroutine
+        WaitGoroutine --> LogStopped
+        LogStopped --> EndStopped[Service Stopped]
+    end

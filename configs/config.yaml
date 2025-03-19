@@ -8,13 +8,25 @@ identity:
 
 security:
   jwt_file: "secrets/jwt.bin"
+  jwt_secret_file: "secrets/jwt_secret"
   aes_key_file: "secrets/aes_key"
+
+middlewares:
+  authentication:
+    topic: "iot-authentication"
+    qos: 2
+    retry_delay: 60 # seconds
+    request_waiting_time: 60 # seconds
+    authentication_cert: "secrets/bootstrap_authentication_cert"
 
 services:
   registration:
     topic: "iot-registration"
     qos: 2
+    max_retries: 6
+    base_delay_seconds: 2
     max_backoff_seconds: 60
+    response_timeout: 10
     enabled: true
   heartbeat:
     topic: "iot-heartbeat"
