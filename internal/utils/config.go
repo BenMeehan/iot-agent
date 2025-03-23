@@ -41,7 +41,7 @@ type Config struct {
 			Enabled           bool          `yaml:"enabled"`             // Enable/disable metrics service
 			MetricsConfigFile string        `yaml:"metrics_config_file"` // Path to the metrics configuration file
 			Interval          time.Duration `yaml:"interval"`            // Interval for sending metrics (in seconds)
-			Timeout           int           `yaml:"timeout"`             // Timeout for collecting metrics (in seconds)
+			Timeout           time.Duration `yaml:"timeout"`             // Timeout for collecting metrics (in seconds)
 			QOS               int           `yaml:"qos"`                 // MQTT QoS level for metrics messages
 		} `yaml:"metrics"`
 

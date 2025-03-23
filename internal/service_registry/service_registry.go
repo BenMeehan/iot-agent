@@ -3,7 +3,6 @@ package service_registry
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/services"
@@ -126,7 +125,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				return services.NewHeartbeatService(
 					config.Services.Heartbeat.Topic,
-					time.Duration(config.Services.Heartbeat.Interval)*time.Second,
+					config.Services.Heartbeat.Interval,
 					config.Services.Heartbeat.QOS,
 					deviceInfo,
 					sr.mqttAuthMiddleware,
@@ -141,8 +140,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				return services.NewMetricsService(
 					config.Services.Metrics.Topic,
 					config.Services.Metrics.MetricsConfigFile,
-					time.Duration(config.Services.Metrics.Interval)*time.Second,
-					time.Duration(config.Services.Metrics.Timeout)*time.Second,
+					config.Services.Metrics.Interval,
+					config.Services.Metrics.Timeout,
 					deviceInfo,
 					config.Services.Metrics.QOS,
 					sr.mqttAuthMiddleware,
