@@ -61,8 +61,8 @@ func NewMQTTAuthenticationMiddleware(
 	jwtManager jwt.JWTManagerInterface,
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
-	retryDelay int,
-	requestWaitingTime int,
+	retryDelay time.Duration,
+	requestWaitingTime time.Duration,
 ) *MQTTAuthenticationMiddleware {
 	return &MQTTAuthenticationMiddleware{
 		authTopic:          authTopic,

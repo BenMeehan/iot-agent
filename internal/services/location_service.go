@@ -26,8 +26,8 @@ type LocationService struct {
 }
 
 // NewLocationService creates and returns a new instance of LocationService.
-func NewLocationService(pubTopic string, interval time.Duration, deviceInfo identity.DeviceInfoInterface,
-	qos int, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
+func NewLocationService(pubTopic string, interval time.Duration, qos int, deviceInfo identity.DeviceInfoInterface,
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
 
 	return &LocationService{
 		PubTopic:         pubTopic,

@@ -110,8 +110,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.MQTT.ClientID,
 					config.Services.Registration.QOS,
 					config.Services.Registration.MaxRetries,
-					config.Services.Registration.BaseDelaySeconds,
-					config.Services.Registration.MaxBackoffSeconds,
+					config.Services.Registration.BaseDelay,
+					config.Services.Registration.MaxBackoff,
 					config.Services.Registration.ResponseTimeout,
 					deviceInfo,
 					sr.mqttAuthMiddleware,
@@ -204,9 +204,9 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				}
 				return services.NewLocationService(
 					config.Services.Location.Topic,
-					time.Duration(config.Services.Location.Interval),
-					deviceInfo,
 					config.Services.Location.Interval,
+					config.Services.Location.QOS,
+					deviceInfo,
 					sr.mqttAuthMiddleware,
 					sr.Logger,
 					provider,
