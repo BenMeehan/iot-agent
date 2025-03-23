@@ -15,8 +15,8 @@ middlewares:
   authentication:
     topic: "iot-authentication"
     qos: 2
-    retry_delay: 60 # seconds
-    request_waiting_time: 60 # seconds
+    retry_delay: 60s
+    request_waiting_time: 60s
     authentication_cert: "secrets/bootstrap_authentication_cert"
 
 services:
@@ -24,19 +24,19 @@ services:
     topic: "iot-registration"
     qos: 2
     max_retries: 6
-    base_delay_seconds: 2
-    max_backoff_seconds: 60
-    response_timeout: 10
+    base_delay: 2s
+    max_backoff: 60s
+    response_timeout: 10s
     enabled: true
   heartbeat:
     topic: "iot-heartbeat"
-    interval: 10
+    interval: 10s
     qos: 1
-    enabled: false
+    enabled: true
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
-    interval: 10
+    interval: 10s
     timeout: 5
     qos: 1
     enabled: false
@@ -56,11 +56,11 @@ services:
     connection_timeout: 30s 
     forward_timeout: 2m        
     auto_disconnect: 2m             
-    enabled: true
+    enabled: false
   location_service:
     topic: "iot-location"
     qos: 1
-    interval: 10
+    interval: 10s
     sensor_based: true
     maps_api_key: ""
     gps_device_baud_rate: 9600
