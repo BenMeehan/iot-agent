@@ -472,7 +472,7 @@ func (u *UpdateService) applyUpdate(instructionFile string, extractedDir string)
 	// Step 3: Apply file operations (add/replace/delete)
 	for _, inst := range instructions {
 		switch {
-		case inst.NewFile == "-": // Delete operation
+		case inst.IsDir == true: // Delete operation
 			if err := os.Remove(inst.TargetPath); err != nil {
 				u.Logger.Error().Err(err).Msgf("Failed to delete file %s", inst.TargetPath)
 				u.rollbackFiles(instructions) // Rollback if any operation fails
@@ -566,6 +566,12 @@ func (u *UpdateService) copyFile(src, dst string) error {
 
 	_, err = io.Copy(destFile, sourceFile)
 	return err
+}
+
+// copyFolder copies a file from src to dst
+func (u *UpdateService) copyFolder(src, dst string) error {
+
+	return nil
 }
 
 // readCurrentVersion reads the current version from configs/version.txt

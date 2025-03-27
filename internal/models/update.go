@@ -1,5 +1,7 @@
 package models
 
+import "encoding/json"
+
 // UpdateInstruction represents an instruction for a file operation during an update process.
 //
 // Fields:
@@ -8,8 +10,10 @@ package models
 //   NewFile: The name of the new file to be added or replaced at the TargetPath.
 //            If "-", it indicates a delete operation.
 type UpdateInstruction struct {
-	TargetPath string `json:"target_path"` // Path of the file to be modified, replaced, or deleted
-	NewFile    string `json:"new_file"`    // Name of the new file or "-" for delete operations
+	IsDir  bool            `json:"isDir"`
+	Create []string        `json:"create,omitempty"`
+	Delete []string        `json:"delete,omitempty"`
+	Modify json.RawMessage `json:"delete,omitempty"`
 }
 
 // UpdateCommandPayload defines the structure of a command payload for initiating an update.
