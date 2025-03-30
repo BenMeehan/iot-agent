@@ -94,16 +94,6 @@ Detailed service documentation is available in the [`/docs`](./docs/) directory.
 - Use structured logs with relevant context.
 - Ensure logs provide meaningful information for debugging.
 
-## Contributing
-
-Contributions are welcome. To contribute:
-
-1. **Fork the repository**
-2. **Create a feature branch** (`feature/your-feature-name`)
-3. **Commit your changes** (`git commit -m "Added new feature"`)
-4. **Push to your branch**
-5. **Open a Pull Request**
-
 ---
 
 This project is licensed under the [Non-Commercial Software License 1.0](./LICENSE.md).
