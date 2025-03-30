@@ -32,7 +32,7 @@ services:
     topic: "iot-heartbeat"
     interval: 10s
     qos: 1
-    enabled: true
+    enabled: false
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
@@ -45,7 +45,7 @@ services:
     qos: 2
     output_size_limit: 1024  
     max_execution_time: 10 
-    enabled: false
+    enabled: true
   ssh:
     topic: "iot-ssh"
     qos: 2

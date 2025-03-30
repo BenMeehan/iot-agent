@@ -75,7 +75,7 @@ func NewCommandService(
 // Start subscribes to the MQTT topic and listens for incoming commands.
 func (cs *CommandService) Start() error {
 	topic := cs.subTopic + "/" + cs.deviceInfo.GetDeviceID()
-	cs.logger.Info().Str("topic", topic).Msg("Starting CommandService and subscribing to MQTT topic")
+	cs.logger.Info().Str("topic", topic).Msg("Starting Command service and subscribing to MQTT topic")
 
 	err := cs.mqttMiddleware.Subscribe(topic, byte(cs.qos), cs.HandleCommand)
 	if err != nil {
