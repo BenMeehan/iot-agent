@@ -12,10 +12,11 @@ graph TD;
     I --> J[Register Services];
     J -->|Service Enabled?| K[Initialize & Start Services];
 
-    K -->|Orderly Start| L[Service Running];
-    L --> M[Listen & Process MQTT Messages];
+    K -->|Attach Middleware| X[Attach MQTTAuthMiddleware for JWT];
+    X -->|Orderly Start| L[Service Running];
 
-    M -->|Shutdown Signal Received?| N{Shutdown?};
+    L --> M[Listen & Process MQTT Messages];
+    L -->|Shutdown Signal Received?| N{Shutdown?};
     N -- Yes --> O[Stop Services in Reverse Order];
     O --> P[Shutdown Complete];
     N -- No --> M;

@@ -1,35 +1,34 @@
 graph TD;
-    A[Start Metrics Service] -->|Check if Running| B{Already Running?};
+    A[Start MetricsService] --> B[Load & Validate Config]
+    B -->|Success| C[Register Default Collectors]
+    B -->|Failure| X[Log Error & Exit]
 
-    B -- Yes --> C[Log Warning & Exit];
-    B -- No --> D[Load & Validate Metrics Config];
+    C --> D{Process Monitoring Enabled?}
+    D -- Yes --> E[Register Process Metrics Collector]
+    D -- No --> F[Initialize Context & Worker Pool]
+    E --> F
 
-    D -- Failure --> E[Log Config Error & Exit];
-    D -- Success --> F[Register Default Collectors];
-
-    F --> G{Process Monitoring Enabled?};
-    G -- Yes --> H[Register Process Metrics Collector];
-    G -- No --> J[Initialize Context & Start Collection Loop];
-
-    H --> J;
-
+    F --> G[Start Metrics Collection Loop]
+    
     subgraph Metrics Collection Loop
-        J --> K[Wait for Next Interval];
-
-        K --> L[Collect System & Process Metrics];
-        L --> M{Metrics Collected?};
-
-        M -- No --> N[Log Collection Failure];
-        M -- Yes --> O[Add Device ID & JWT Token];
-
-        O --> P[Publish Metrics via MQTT];
-        P -- Success --> Q[Log Metrics Sent];
-        P -- Failure --> R[Log Publish Error & Retry];
-
-        Q --> S[Wait for Next Cycle];
-        R --> S;
-        N --> S;
-
-        S -->|Continue Loop| K;
+        G --> H[Wait for Interval Timer]
+        H --> I[Collect Metrics Concurrently]
+        I --> J[Enrich with Device Info]
+        J --> K{Publish Metrics via MQTT}
+        K -- Success --> L[Log Success]
+        K -- Failure --> M[Retry Publishing (3 attempts)]
+        M -->|Fails| N[Log Error & Continue]
+        L --> O{Stop Requested?}
+        N --> O
+        O -- No --> H
+        O -- Yes --> P[Shutdown Metrics Collection]
     end
-    S -->|Stop Signal Received| T[Cleanup & Exit];
+    
+    P --> Q[Shutdown Worker Pool]
+    Q --> R[Service Stopped]
+
+    subgraph Process Metrics Handling
+        E --> S[Filter & Register Target Processes]
+        S --> T[Monitor CPU, Mem, IO]
+        T --> U[Integrate with Metrics Collection]
+    end

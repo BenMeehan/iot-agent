@@ -20,26 +20,29 @@ type Config struct {
 
 	Services struct {
 		Registration struct {
-			Topic             string `yaml:"topic"`               // MQTT topic for registration service
-			MaxBackoffSeconds int    `yaml:"max_backoff_seconds"` // Maximum backoff time for registration retries
-			Enabled           bool   `yaml:"enabled"`             // Enable/disable registration service
-			QOS               int    `yaml:"qos"`                 // MQTT QoS level for registration messages
+			Topic           string        `yaml:"topic"`            // MQTT topic for registration service
+			Enabled         bool          `yaml:"enabled"`          // Enable/disable registration service
+			QOS             int           `yaml:"qos"`              // MQTT QoS level for registration messages
+			MaxRetries      int           `yaml:"max_retries"`      // Maximum number of retry attempts
+			BaseDelay       time.Duration `yaml:"base_delay"`       // Initial delay between retries
+			MaxBackoff      time.Duration `yaml:"max_backoff"`      // Maximum backoff time for registration retries
+			ResponseTimeout time.Duration `yaml:"response_timeout"` // Timeout for response per attempt
 		} `yaml:"registration"`
 
 		Heartbeat struct {
-			Topic    string `yaml:"topic"`    // MQTT topic for heartbeat service
-			Enabled  bool   `yaml:"enabled"`  // Enable/disable heartbeat service
-			Interval int    `yaml:"interval"` // Interval between heartbeats (in seconds)
-			QOS      int    `yaml:"qos"`      // MQTT QoS level for heartbeat messages
+			Topic    string        `yaml:"topic"`    // MQTT topic for heartbeat service
+			Enabled  bool          `yaml:"enabled"`  // Enable/disable heartbeat service
+			Interval time.Duration `yaml:"interval"` // Interval between heartbeats (in seconds)
+			QOS      int           `yaml:"qos"`      // MQTT QoS level for heartbeat messages
 		} `yaml:"heartbeat"`
 
 		Metrics struct {
-			Topic             string `yaml:"topic"`               // MQTT topic for metrics service
-			Enabled           bool   `yaml:"enabled"`             // Enable/disable metrics service
-			MetricsConfigFile string `yaml:"metrics_config_file"` // Path to the metrics configuration file
-			Interval          int    `yaml:"interval"`            // Interval for sending metrics (in seconds)
-			Timeout           int    `yaml:"timeout"`             // Timeout for collecting metrics (in seconds)
-			QOS               int    `yaml:"qos"`                 // MQTT QoS level for metrics messages
+			Topic             string        `yaml:"topic"`               // MQTT topic for metrics service
+			Enabled           bool          `yaml:"enabled"`             // Enable/disable metrics service
+			MetricsConfigFile string        `yaml:"metrics_config_file"` // Path to the metrics configuration file
+			Interval          time.Duration `yaml:"interval"`            // Interval for sending metrics (in seconds)
+			Timeout           time.Duration `yaml:"timeout"`             // Timeout for collecting metrics (in seconds)
+			QOS               int           `yaml:"qos"`                 // MQTT QoS level for metrics messages
 		} `yaml:"metrics"`
 
 		Command struct {
@@ -64,14 +67,14 @@ type Config struct {
 		} `yaml:"ssh"`
 
 		Location struct {
-			Topic             string `yaml:"topic"`           // MQTT topic for location service
-			Enabled           bool   `yaml:"enabled"`         // Enable/disable location service
-			Interval          int    `yaml:"interval"`        // Interval between geo-location messages (in seconds)
-			QOS               int    `yaml:"qos"`             // MQTT QoS level for location messages
-			SensorBased       bool   `yaml:"sensor_based"`    // Use sensor or geo-location api
-			MapsAPIKey        string `yaml:"maps_api_key"`    // Google maps API Key
-			GPSDeviceBaudRate int    `yaml:"gps_baud_rate"`   // The Baud rate for GPS sensor
-			GPSDevicePort     string `yaml:"gps_device_port"` // UNIX Port where the GPS sensor is mounted
+			Topic             string        `yaml:"topic"`           // MQTT topic for location service
+			Enabled           bool          `yaml:"enabled"`         // Enable/disable location service
+			Interval          time.Duration `yaml:"interval"`        // Interval between geo-location messages (in seconds)
+			QOS               int           `yaml:"qos"`             // MQTT QoS level for location messages
+			SensorBased       bool          `yaml:"sensor_based"`    // Use sensor or geo-location api
+			MapsAPIKey        string        `yaml:"maps_api_key"`    // Google maps API Key
+			GPSDeviceBaudRate int           `yaml:"gps_baud_rate"`   // The Baud rate for GPS sensor
+			GPSDevicePort     string        `yaml:"gps_device_port"` // UNIX Port where the GPS sensor is mounted
 		} `yaml:"location_service"`
 
 		Update struct {
@@ -84,9 +87,20 @@ type Config struct {
 	} `yaml:"services"`
 
 	Security struct {
-		JWTFile    string `yaml:"jwt_file"`     // Path to the JWT token file
-		AESKeyFile string `yaml:"aes_key_file"` // Path to the AES key file
+		JWTFile       string `yaml:"jwt_file"`        // Path to the JWT token file
+		JWTSecretFile string `yaml:"jwt_secret_file"` // Path to the JWT secret file
+		AESKeyFile    string `yaml:"aes_key_file"`    // Path to the AES key file
 	}
+
+	Middlewares struct {
+		Authentication struct {
+			Topic              string        `yaml:"topic"`                // MQTT topic for authentication middleware
+			QOS                int           `yaml:"qos"`                  // MQTT QoS level for authentication messages
+			RetryDelay         time.Duration `yaml:"retry_delay"`          // Delay between retries (in seconds)
+			RequestWaitingTime time.Duration `yaml:"request_waiting_time"` // Max Duration to wait for MQTT response (in seconds)
+			AuthenticationCert string        `yaml:"authentication_cert"`  // Path to the authentication certificate
+		} `yaml:"authentication"`
+	} `yaml:"middlewares"`
 }
 
 // LoadConfig loads the YAML configuration from the specified file.

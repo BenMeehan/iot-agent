@@ -1,24 +1,39 @@
 graph TD;
-    A[Start Registration Service] -->|Check Existing Device ID| B{Device ID Found?};
-    
-    B -- No --> C[Create Registration Payload];
-    B -- Yes --> D[Validate JWT Token];
+    Start[Start Registration] -->|Check if Running| CheckRunning
+    CheckRunning -->|Already Running| LogWarning
+    CheckRunning -->|Not Running| InitContext
+    InitContext --> LogStart
+    LogStart --> RunService
 
-    D -- Valid --> E[Device Already Registered];
-    D -- Invalid --> F[Re-registration Needed];
-    
-    C --> G[Encrypt Payload] --> H[Attempt Registration];
-    F --> G;
+    subgraph RunService[Registration Process]
+        CheckDeviceID[Check Existing Device ID] -->|Exists| UseExistingID
+        CheckDeviceID -->|Not Found| UseClientID
+        UseExistingID --> PreparePayload
+        UseClientID --> PreparePayload
+        PreparePayload --> SubscribeResponseTopic
+        SubscribeResponseTopic --> PublishPayload
+        PublishPayload --> WaitForResponse
 
-    H -->|Success| I[Save Device ID & JWT];
-    H -->|Failure| J{Retry?};
+        subgraph RetryLoop[Retry Mechanism]
+            WaitForResponse -->|Response Received| Success
+            WaitForResponse -->|Timeout| Retry
+            Retry -->|Max Retries Reached| Fail
+            Retry -->|Retries Left| Reattempt
+            Reattempt --> PublishPayload
+        end
+    end
 
-    J -- Yes --> K[Exponential Backoff];
-    J -- No --> L[Log Failure];
+    Success --> SaveDeviceID
+    SaveDeviceID --> End[Registration Successful]
 
-    I --> M[Registration Complete];
-    L --> N[Exit];
+    Fail --> LogFailure
+    LogFailure --> EndFailure[Registration Failed]
 
-    subgraph Retry Mechanism
-        K -->|Wait & Retry| H;
+    subgraph StopService[Stopping Registration]
+        Stop[Stop Service] -->|Check if Running| CheckRunningStop
+        CheckRunningStop -->|Not Running| LogNotRunning
+        CheckRunningStop -->|Running| CancelContext
+        CancelContext --> UnsubscribeTopic
+        UnsubscribeTopic --> LogStopped
+        LogStopped --> EndStopped[Service Stopped]
     end

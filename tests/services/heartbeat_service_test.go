@@ -1,7 +1,7 @@
-package services_test
+package services
 
 import (
-	"os"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,42 +12,144 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func TestHeartbeatService_Start(t *testing.T) {
+// TestHeartbeatService_Start_Success tests the successful start of the HeartbeatService.
+func TestHeartbeatService_Start_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockJWTManager := new(mocks.JWTManagerInterface)
-	mockMqttClient := new(mocks.MQTTClient)
-	mockMqttToken := new(mocks.MockToken)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	logger := zerolog.Nop()
 
-	// Mock expectations
-	mockDeviceInfo.On("GetDeviceID").Return("device123")
-	mockJWTManager.On("GetJWT").Return("test-jwt-token")
+	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
 
-	// Mock expectations for MQTT client
-	mockMqttToken.On("Wait").Return(true)
-	mockMqttToken.On("Error").Return(nil)
-	mockMqttClient.On("Publish", "heartbeat/topic", byte(1), false, mock.Anything).Return(mockMqttToken)
+	h := services.NewHeartbeatService(
+		"test-topic",
+		1*time.Second,
+		1,
+		mockDeviceInfo,
+		mockMQTTMiddleware,
+		logger,
+	)
 
-	// Create HeartbeatService instance
-	service := services.NewHeartbeatService("heartbeat/topic", 1*time.Second, 1, mockDeviceInfo, mockMqttClient, mockJWTManager, logger)
+	// Execute
+	err := h.Start()
 
-	// Start the service
-	err := service.Start()
+	// Assert
 	assert.NoError(t, err)
 
-	// Wait for the first heartbeat to be published
-	time.Sleep(2 * time.Second)
+	// Try to start again (should fail)
+	err = h.Start()
+	assert.Error(t, err)
+	assert.Equal(t, "heartbeat service is already running", err.Error())
+
+	// Cleanup
+	err = h.Stop()
+	assert.NoError(t, err)
+}
+
+// TestHeartbeatService_Stop_Success tests the successful stop of the HeartbeatService.
+func TestHeartbeatService_Stop_Success(t *testing.T) {
+	// Setup
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	logger := zerolog.Nop()
+
+	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
+
+	h := services.NewHeartbeatService(
+		"test-topic",
+		1*time.Second,
+		1,
+		mockDeviceInfo,
+		mockMQTTMiddleware,
+		logger,
+	)
+
+	// Start the service
+	err := h.Start()
+	assert.NoError(t, err)
+
+	// Execute
+	err = h.Stop()
+
+	// Assert
+	assert.NoError(t, err)
+
+	// Try to stop again (should fail)
+	err = h.Stop()
+	assert.Error(t, err)
+	assert.Equal(t, "heartbeat service is not running", err.Error())
+}
+
+// TestHeartbeatService_runHeartbeatLoop_Success tests the heartbeat loop with successful publishing.
+func TestHeartbeatService_runHeartbeatLoop_Success(t *testing.T) {
+	// Setup
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	logger := zerolog.Nop()
+
+	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
+
+	// Mock the MQTT middleware to simulate successful publishing
+	mockMQTTMiddleware.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	h := services.NewHeartbeatService(
+		"test-topic",
+		100*time.Millisecond, // Short interval for testing
+		1,
+		mockDeviceInfo,
+		mockMQTTMiddleware,
+		logger,
+	)
+
+	// Start the service
+	err := h.Start()
+	assert.NoError(t, err)
+
+	// Wait for at least one heartbeat to be published
+	time.Sleep(150 * time.Millisecond)
 
 	// Stop the service
-	err = service.Stop()
-	if err != nil {
-		t.Errorf("Error stopping service: %v", err)
-	}
+	err = h.Stop()
+	assert.NoError(t, err)
 
-	// Assert that the mocks were called as expected
+	// Assert
 	mockDeviceInfo.AssertExpectations(t)
-	mockJWTManager.AssertExpectations(t)
-	mockMqttClient.AssertExpectations(t)
-	mockMqttToken.AssertExpectations(t)
+	mockMQTTMiddleware.AssertExpectations(t)
+}
+
+// TestHeartbeatService_runHeartbeatLoop_PublishError tests the heartbeat loop with a publishing error.
+func TestHeartbeatService_runHeartbeatLoop_PublishError(t *testing.T) {
+	// Setup
+	mockDeviceInfo := new(mocks.DeviceInfoInterface)
+	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	logger := zerolog.Nop()
+
+	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
+
+	// Mock the MQTT middleware to simulate a publishing error
+	mockMQTTMiddleware.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("publish failed"))
+
+	h := services.NewHeartbeatService(
+		"test-topic",
+		100*time.Millisecond, // Short interval for testing
+		1,
+		mockDeviceInfo,
+		mockMQTTMiddleware,
+		logger,
+	)
+
+	// Start the service
+	err := h.Start()
+	assert.NoError(t, err)
+
+	// Wait for at least one heartbeat to be attempted
+	time.Sleep(150 * time.Millisecond)
+
+	// Stop the service
+	err = h.Stop()
+	assert.NoError(t, err)
+
+	// Assert
+	mockDeviceInfo.AssertExpectations(t)
+	mockMQTTMiddleware.AssertExpectations(t)
 }

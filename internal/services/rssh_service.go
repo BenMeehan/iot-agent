@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 	"golang.org/x/crypto/ssh"
@@ -23,7 +23,7 @@ import (
 // SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
 	DeviceInfo        identity.DeviceInfoInterface
-	MqttClient        mqtt.MQTTClient
+	mqttMiddleware    mqtt_middleware.MQTTAuthMiddleware
 	FileClient        file.FileOperations
 	Logger            zerolog.Logger
 	SubTopic          string
@@ -48,7 +48,7 @@ type SSHService struct {
 }
 
 // NewSSHService initializes a new SSHService instance.
-func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttClient mqtt.MQTTClient,
+func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
 	logger zerolog.Logger, sshUser string, privateKeyPath string,
 	fileClient file.FileOperations, qos int, maxListeners, maxSSHConnections int,
 	connectionTimeout, forwardTimeout, autoDisconnect time.Duration) *SSHService {
@@ -71,7 +71,7 @@ func NewSSHService(subTopic string, deviceInfo identity.DeviceInfoInterface, mqt
 	return &SSHService{
 		SubTopic:          subTopic,
 		DeviceInfo:        deviceInfo,
-		MqttClient:        mqttClient,
+		mqttMiddleware:    mqttMiddleware,
 		Logger:            logger,
 		SSHUser:           sshUser,
 		PrivateKeyPath:    privateKeyPath,
@@ -148,7 +148,10 @@ func (s *SSHService) Stop() error {
 	s.clientPoolMutex.Unlock()
 
 	topic := fmt.Sprintf("%s/%s", s.SubTopic, s.DeviceInfo.GetDeviceID())
-	s.MqttClient.Unsubscribe(topic).Wait()
+	err := s.mqttMiddleware.Unsubscribe(topic)
+	if err != nil {
+		s.Logger.Warn().Err(err).Msg("Error unsubscribing from mqtt")
+	}
 
 	s.Logger.Info().Msg("SSH service stopped successfully")
 	return nil
@@ -203,9 +206,8 @@ func (s *SSHService) cleanupExpiredListeners() {
 // subscribeToTopic subscribes to the MQTT topic for SSH requests.
 func (s *SSHService) subscribeToTopic(topic string) error {
 	s.Logger.Info().Str("topic", topic).Msg("Subscribing to MQTT topic")
-	token := s.MqttClient.Subscribe(topic, byte(s.QOS), s.handleSSHRequest)
-	token.Wait()
-	if err := token.Error(); err != nil {
+	err := s.mqttMiddleware.Subscribe(topic, byte(s.QOS), s.handleSSHRequest)
+	if err != nil {
 		s.Logger.Error().Err(err).Str("topic", topic).Msg("Failed to subscribe to MQTT topic")
 		return err
 	}
@@ -312,10 +314,9 @@ func (s *SSHService) publishDeviceReply(deviceID, serverId string, localPort, re
 	}
 
 	replyTopic := fmt.Sprintf("%s/%s", s.SubTopic, serverId)
-	token := s.MqttClient.Publish(replyTopic, byte(s.QOS), false, payload)
-	token.Wait()
+	err = s.mqttMiddleware.Publish(replyTopic, byte(s.QOS), false, payload)
 
-	if err := token.Error(); err != nil {
+	if err != nil {
 		s.Logger.Error().Err(err).Str("topic", replyTopic).Msg("Failed to publish DeviceReply message")
 	} else {
 		s.Logger.Debug().Str("topic", replyTopic).Msg("Published DeviceReply message")
@@ -371,8 +372,17 @@ func (s *SSHService) forwardConnection(conn net.Conn, localPort int, backendHost
 	defer localConn.Close()
 
 	// Set read deadline so io.Copy doesn't block forever
-	conn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
-	localConn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	err = conn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	if err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to set remote connection deadline")
+		return
+	}
+
+	err = localConn.SetReadDeadline(time.Now().Add(s.ForwardTimeout))
+	if err != nil {
+		s.Logger.Error().Err(err).Msg("Failed to set local connection deadline")
+		return
+	}
 
 	s.Logger.Debug().Int("local_port", localPort).Str("backend", backendHost).Msg("Forwarding connection established")
 

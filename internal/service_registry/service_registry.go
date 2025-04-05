@@ -3,8 +3,8 @@ package service_registry
 import (
 	"errors"
 	"fmt"
-	"time"
 
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
@@ -12,31 +12,30 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/location"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
 
 // ServiceRegistry manages the lifecycle of various services in the system.
 type ServiceRegistry struct {
-	services          map[string]Service // Stores registered services
-	serviceKeys       []string           // Maintains order of service registration
-	mqttClient        mqtt.MQTTClient
-	fileClient        file.FileOperations
-	encryptionManager encryption.EncryptionManagerInterface
-	jwtManager        jwt.JWTManagerInterface
-	Logger            zerolog.Logger
+	services           map[string]Service // Stores registered services
+	serviceKeys        []string           // Maintains order of service registration
+	mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware
+	fileClient         file.FileOperations
+	encryptionManager  encryption.EncryptionManagerInterface
+	jwtManager         jwt.JWTManagerInterface
+	Logger             zerolog.Logger
 }
 
 // NewServiceRegistry initializes a new service registry with dependencies.
-func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
+func NewServiceRegistry(mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
 	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *ServiceRegistry {
 	return &ServiceRegistry{
-		services:          make(map[string]Service),
-		mqttClient:        mqttClient,
-		fileClient:        fileClient,
-		encryptionManager: encryptionManager,
-		jwtManager:        jwtManager,
-		Logger:            logger,
+		services:           make(map[string]Service),
+		mqttAuthMiddleware: mqttAuthMiddleware,
+		fileClient:         fileClient,
+		encryptionManager:  encryptionManager,
+		jwtManager:         jwtManager,
+		Logger:             logger,
 	}
 }
 
@@ -109,12 +108,13 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Registration.Topic,
 					config.MQTT.ClientID,
 					config.Services.Registration.QOS,
-					config.Services.Registration.MaxBackoffSeconds,
+					config.Services.Registration.MaxRetries,
+					config.Services.Registration.BaseDelay,
+					config.Services.Registration.MaxBackoff,
+					config.Services.Registration.ResponseTimeout,
 					deviceInfo,
-					sr.mqttClient,
+					sr.mqttAuthMiddleware,
 					sr.fileClient,
-					sr.jwtManager,
-					sr.encryptionManager,
 					sr.Logger,
 				), nil
 			},
@@ -125,11 +125,10 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				return services.NewHeartbeatService(
 					config.Services.Heartbeat.Topic,
-					time.Duration(config.Services.Heartbeat.Interval)*time.Second,
+					config.Services.Heartbeat.Interval,
 					config.Services.Heartbeat.QOS,
 					deviceInfo,
-					sr.mqttClient,
-					sr.jwtManager,
+					sr.mqttAuthMiddleware,
 					sr.Logger,
 				), nil
 			},
@@ -141,13 +140,12 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				return services.NewMetricsService(
 					config.Services.Metrics.Topic,
 					config.Services.Metrics.MetricsConfigFile,
-					time.Duration(config.Services.Metrics.Interval)*time.Second,
-					time.Duration(config.Services.Metrics.Timeout)*time.Second,
+					config.Services.Metrics.Interval,
+					config.Services.Metrics.Timeout,
 					deviceInfo,
 					config.Services.Metrics.QOS,
-					sr.mqttClient,
+					sr.mqttAuthMiddleware,
 					sr.fileClient,
-					sr.jwtManager,
 					sr.Logger,
 				), nil
 			},
@@ -161,10 +159,8 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Command.QOS,
 					config.Services.Command.OutputSizeLimit,
 					config.Services.Command.MaxExecutionTime,
-					sr.mqttClient,
+					sr.mqttAuthMiddleware,
 					deviceInfo,
-					sr.encryptionManager,
-					sr.jwtManager,
 					sr.Logger,
 				), nil
 			},
@@ -176,7 +172,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				return services.NewSSHService(
 					config.Services.SSH.Topic,
 					deviceInfo,
-					sr.mqttClient,
+					sr.mqttAuthMiddleware,
 					sr.Logger,
 					config.Services.SSH.SSHUser,
 					config.Services.SSH.PrivateKeyPath,
@@ -207,10 +203,10 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				}
 				return services.NewLocationService(
 					config.Services.Location.Topic,
-					time.Duration(config.Services.Location.Interval),
-					deviceInfo,
 					config.Services.Location.Interval,
-					sr.mqttClient,
+					config.Services.Location.QOS,
+					deviceInfo,
+					sr.mqttAuthMiddleware,
 					sr.Logger,
 					provider,
 				), nil
@@ -224,7 +220,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Update.Topic,
 					deviceInfo,
 					config.Services.Update.QOS,
-					sr.mqttClient,
+					sr.mqttAuthMiddleware,
 					sr.fileClient,
 					sr.Logger,
 					config.Services.Update.StateFile,

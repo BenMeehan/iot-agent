@@ -13,7 +13,4 @@ type Heartbeat struct {
 
 	// Status indicates the current state of the device (e.g., "online", "offline", "error").
 	Status string `json:"status"`
-
-	// JWTToken is an authentication token used to verify the identity of the device.
-	JWTToken string `json:"jwt_token"`
 }
