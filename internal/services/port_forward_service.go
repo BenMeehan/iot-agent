@@ -167,7 +167,6 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 		s.Logger.Error().Err(err).Msg("Failed to establish HTTP/2 tunnel")
 		return
 	}
-	defer resp.Body.Close()
 
 	s.Logger.Info().Str("url", tunnelURL).Msg("Tunnel established")
 
@@ -175,6 +174,7 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 	serverToLocalDone := make(chan struct{})
 	go func() {
 		defer close(serverToLocalDone)
+		defer resp.Body.Close()
 		_, err = io.Copy(localConn, resp.Body)
 		if err != nil && s.ctx.Err() == nil {
 			s.Logger.Warn().Err(err).Msg("Error copying server to local")
