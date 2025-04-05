@@ -134,7 +134,7 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 		scheme = "http"
 	}
 
-	tunnelURL := fmt.Sprintf("%s://%s/tunnel/%s/%d/%d", scheme, s.ServerAddress, s.DeviceInfo.GetDeviceID(), request.LocalPort, request.RemotePort, request.UserID)
+	tunnelURL := fmt.Sprintf("%s://%s/tunnel/%s/%d/%d/%s", scheme, s.ServerAddress, s.DeviceInfo.GetDeviceID(), request.LocalPort, request.RemotePort, request.UserID)
 
 	// Create pipe for data transfer
 	pr, pw := io.Pipe()
