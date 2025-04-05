@@ -45,18 +45,13 @@ services:
     qos: 2
     output_size_limit: 1024  
     max_execution_time: 10 
-    enabled: true
-  ssh:
-    topic: "iot-ssh"
-    qos: 2
-    ssh_user: "ben"
-    private_key_path: "certs/id_rsa"
-    max_listeners: 10               
-    max_ssh_connections: 5           
-    connection_timeout: 30s 
-    forward_timeout: 2m        
-    auto_disconnect: 2m             
     enabled: false
+  port-forward:
+    topic: "iot-port-forward"
+    qos: 2   
+    server_address: "localhost"
+    use_tls: false
+    enabled: true
   location_service:
     topic: "iot-location"
     qos: 1

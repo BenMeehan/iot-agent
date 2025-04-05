@@ -167,22 +167,17 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 		},
 		{
 			name:    "ssh",
-			enabled: config.Services.SSH.Enabled,
+			enabled: config.Services.PortForward.Enabled,
 			constructor: func() (Service, error) {
-				return services.NewSSHService(
-					config.Services.SSH.Topic,
+				return services.NewPortForwardService(
+					config.Services.PortForward.Topic,
+					config.Services.PortForward.QOS,
+					config.Services.PortForward.ServerAddress,
+					config.Services.PortForward.UseTLS,
 					deviceInfo,
 					sr.mqttAuthMiddleware,
-					sr.Logger,
-					config.Services.SSH.SSHUser,
-					config.Services.SSH.PrivateKeyPath,
 					sr.fileClient,
-					config.Services.SSH.QOS,
-					config.Services.SSH.MaxListeners,
-					config.Services.SSH.MaxSSHConnections,
-					config.Services.SSH.ConnectionTimeout,
-					config.Services.SSH.ForwardTimeout,
-					config.Services.SSH.AutoDisconnect,
+					sr.Logger,
 				), nil
 			},
 		},
