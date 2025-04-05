@@ -80,11 +80,15 @@ func (s *PortForwardService) Stop() error {
 
 // handlePortForwardRequest handles an incoming MQTT port forward request.
 func (s *PortForwardService) handlePortForwardRequest(client MQTT.Client, msg MQTT.Message) {
+	s.Logger.Info().Str("topic", msg.Topic()).Msg("Received port forward request")
+
 	var request models.PortForwardRequest
 	if err := json.Unmarshal(msg.Payload(), &request); err != nil {
 		s.Logger.Error().Err(err).Msg("Invalid port forward request")
 		return
 	}
+
+	s.Logger.Info().Str("user_id", request.UserID).Int("local_port", request.LocalPort).Int("remote_port", request.RemotePort).Msg("Processing port forward request")
 
 	// Check if service is shutting down
 	select {
