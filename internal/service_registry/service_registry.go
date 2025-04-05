@@ -166,7 +166,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			},
 		},
 		{
-			name:    "ssh",
+			name:    "port-forward",
 			enabled: config.Services.PortForward.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewPortForwardService(
