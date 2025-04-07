@@ -139,7 +139,10 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 
-	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, tunnelURL, pr)
+	tunnelCtx, tunnelCancel := context.WithCancel(context.Background())
+	defer tunnelCancel()
+
+	req, err := http.NewRequestWithContext(tunnelCtx, http.MethodPost, tunnelURL, pr)
 	if err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to create HTTP/2 tunnel request")
 		return
