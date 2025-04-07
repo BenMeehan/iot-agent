@@ -181,6 +181,9 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 	<-ctx.Done()
 	_ = localConn.Close()
 	_ = resp.Body.Close()
+	_ = req.Body.Close()
+	_ = pw.Close()
+	_ = pr.Close()
 	s.Logger.Info().Msg("Tunnel closed (either direction ended)")
 	wg.Wait()
 }
