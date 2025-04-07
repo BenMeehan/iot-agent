@@ -154,7 +154,6 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 
 	s.Logger.Info().Str("url", tunnelURL).Msg("Tunnel established")
 
-	// ✅ Local cancel context for early shutdown
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
@@ -166,17 +165,19 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 		defer pw.Close()
 		n, err := io.Copy(pw, localConn)
 		s.Logger.Info().Int64("bytes", n).Err(err).Msg("Local to server copy finished")
-		cancel() // 🔥 Shutdown when this direction ends
+		cancel()
 	}()
 
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(localConn, resp.Body)
 		s.Logger.Info().Int64("bytes", n).Err(err).Msg("Server to local copy finished")
-		cancel() // 🔥 Shutdown when this direction ends
+		cancel()
 	}()
 
-	<-ctx.Done() // 💡 Wait for first error/close
+	<-ctx.Done()
+	_ = localConn.Close()
+	_ = resp.Body.Close()
 	s.Logger.Info().Msg("Tunnel closed (either direction ended)")
 	wg.Wait()
 }
