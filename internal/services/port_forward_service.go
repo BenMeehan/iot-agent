@@ -105,7 +105,6 @@ func (s *PortForwardService) handlePortForwardRequest(client MQTT.Client, msg MQ
 func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 	defer s.tunnels.Done()
 
-	// Connect to local service
 	localConn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", request.LocalPort), 5*time.Second)
 	if err != nil {
 		s.Logger.Error().Err(err).Int("local_port", request.LocalPort).Msg("Failed to connect to local service")
@@ -113,14 +112,11 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 	}
 	defer localConn.Close()
 
-	// Configure HTTP/2 client
 	var client *http.Client
 	var scheme string
 	if s.UseTLS {
 		tr := &http2.Transport{
-			TLSClientConfig: &tls.Config{
-				NextProtos: []string{"h2"},
-			},
+			TLSClientConfig: &tls.Config{NextProtos: []string{"h2"}},
 		}
 		client = &http.Client{Transport: tr}
 		scheme = "https"
@@ -135,13 +131,14 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 		scheme = "http"
 	}
 
-	tunnelURL := fmt.Sprintf("%s://%s/tunnel/%s/%d/%d/%s", scheme, s.ServerAddress, s.DeviceInfo.GetDeviceID(), request.LocalPort, request.RemotePort, request.UserID)
+	tunnelURL := fmt.Sprintf("%s://%s/tunnel/%s/%d/%d/%s",
+		scheme, s.ServerAddress, s.DeviceInfo.GetDeviceID(),
+		request.LocalPort, request.RemotePort, request.UserID,
+	)
 
-	// Create pipe for data transfer
 	pr, pw := io.Pipe()
 	defer pr.Close()
 
-	// Start HTTP/2 request
 	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, tunnelURL, pr)
 	if err != nil {
 		s.Logger.Error().Err(err).Msg("Failed to create HTTP/2 tunnel request")
@@ -157,43 +154,29 @@ func (s *PortForwardService) handleTunnel(request models.PortForwardRequest) {
 
 	s.Logger.Info().Str("url", tunnelURL).Msg("Tunnel established")
 
-	// Bidirectional data transfer
+	// ✅ Local cancel context for early shutdown
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Local to server (responses from lport)
 	go func() {
 		defer wg.Done()
-		defer pw.Close() // Close pipe when done
+		defer pw.Close()
 		n, err := io.Copy(pw, localConn)
 		s.Logger.Info().Int64("bytes", n).Err(err).Msg("Local to server copy finished")
-		if err != nil && s.ctx.Err() == nil {
-			s.Logger.Warn().Err(err).Msg("Error copying local to server")
-		}
+		cancel() // 🔥 Shutdown when this direction ends
 	}()
 
-	// Server to local (requests to lport)
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(localConn, resp.Body)
 		s.Logger.Info().Int64("bytes", n).Err(err).Msg("Server to local copy finished")
-		if err != nil && s.ctx.Err() == nil {
-			s.Logger.Warn().Err(err).Msg("Error copying server to local")
-		}
+		cancel() // 🔥 Shutdown when this direction ends
 	}()
 
-	// Wait for shutdown or both copies to finish
-	select {
-	case <-s.ctx.Done():
-		s.Logger.Info().Msg("Tunnel closed (service shutdown)")
-	case <-func() chan struct{} {
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		return done
-	}():
-		s.Logger.Info().Msg("Tunnel closed (both connections ended)")
-	}
+	<-ctx.Done() // 💡 Wait for first error/close
+	s.Logger.Info().Msg("Tunnel closed (either direction ended)")
+	wg.Wait()
 }
