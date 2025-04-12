@@ -43,19 +43,17 @@ services:
   command:
     topic: "iot-commands"
     qos: 2
-    output_size_limit: 1024  
-    max_execution_time: 10 
+    output_size_limit: 1024
+    max_execution_time: 10
     enabled: true
   ssh:
     topic: "iot-ssh"
     qos: 2
     ssh_user: "ben"
     private_key_path: "certs/id_rsa"
-    max_listeners: 10               
-    max_ssh_connections: 5           
-    connection_timeout: 30s 
-    forward_timeout: 2m        
-    auto_disconnect: 2m             
+    server_public_key_path: "certs/id_rsa.pub"
+    max_ssh_connections: 5
+    connection_timeout: 30s
     enabled: false
   location_service:
     topic: "iot-location"

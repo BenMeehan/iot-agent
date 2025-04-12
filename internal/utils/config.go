@@ -58,12 +58,10 @@ type Config struct {
 			Enabled           bool          `yaml:"enabled"`             // Enable/disable SSH service
 			SSHUser           string        `yaml:"ssh_user"`            // SSH username for connecting to the backend
 			PrivateKeyPath    string        `yaml:"private_key_path"`    // Path to the device's private key
+			ServerPublicKeyPath string        `yaml:"server_public_key_path"` // Path to the server's public key
 			QOS               int           `yaml:"qos"`                 // MQTT QoS level for SSH service messages
-			MaxListeners      int           `yaml:"max_listeners"`       // Maximum number of active SSH listeners
 			MaxSSHConnections int           `yaml:"max_ssh_connections"` // Maximum number of concurrent SSH connections
 			ConnectionTimeout time.Duration `yaml:"connection_timeout"`  // Timeout duration for establishing an SSH connection
-			ForwardTimeout    time.Duration `yaml:"forward_timeout"`     // Timeout duration for how long a connection is inactive
-			AutoDisconnect    time.Duration `yaml:"auto_disconnect"`     // Duration after which inactive SSH connections are closed
 		} `yaml:"ssh"`
 
 		Location struct {
