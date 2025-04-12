@@ -23,37 +23,36 @@ import (
 // SSHService manages SSH connections and port forwarding via MQTT.
 type SSHService struct {
 	// Configuration
-	topic          string
-	qos               int
+	topic string
+	qos   int
 
 	// SSH user credentials
-	sshUser           string
-	privateKeyPath    string
-	serverPublicKeyPath string
-	cachedPrivateKey  ssh.Signer
+	sshUser               string
+	privateKeyPath        string
+	serverPublicKeyPath   string
+	cachedPrivateKey      ssh.Signer
 	cachedServerPublicKey ssh.PublicKey
 
 	// Dependencies
-	deviceInfo        identity.DeviceInfoInterface
-	mqttMiddleware    mqtt_middleware.MQTTAuthMiddleware
-	fileClient        file.FileOperations
-	logger            zerolog.Logger
-
+	deviceInfo     identity.DeviceInfoInterface
+	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	fileClient     file.FileOperations
+	logger         zerolog.Logger
 
 	/// Connection settings
 	connectionTimeout time.Duration
-	maxSSHConnections 	  int
-	sshClients 	map[string]*ssh.Client
-	sshClientsMux  sync.Mutex
-	
+	maxSSHConnections int
+	sshClients        map[string]*ssh.Client
+	sshClientsMux     sync.Mutex
+
 	// Internal state
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewSSHService initializes a new SSHService instance.
-func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPublicKeyPath string, deviceInfo identity.DeviceInfoInterface, 
+func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPublicKeyPath string, deviceInfo identity.DeviceInfoInterface,
 	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, logger zerolog.Logger, maxSSHConnections int,
 	connectionTimeout time.Duration) *SSHService {
 
@@ -67,20 +66,20 @@ func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPubl
 	}
 
 	return &SSHService{
-		topic:          subTopic,
-		qos:               qos,
-		sshUser:           sshUser,
-		privateKeyPath:    privateKeyPath,
+		topic:               subTopic,
+		qos:                 qos,
+		sshUser:             sshUser,
+		privateKeyPath:      privateKeyPath,
 		serverPublicKeyPath: serverPublicKeyPath,
-		deviceInfo:        deviceInfo,
-		mqttMiddleware:    mqttMiddleware,
-		fileClient:        fileClient,
-		logger:            logger,
-		connectionTimeout: connectionTimeout,
-		maxSSHConnections: 	   maxSSHConnections,
-		sshClients: 	make(map[string]*ssh.Client),
-		ctx:               ctx,
-		cancel:            cancel,
+		deviceInfo:          deviceInfo,
+		mqttMiddleware:      mqttMiddleware,
+		fileClient:          fileClient,
+		logger:              logger,
+		connectionTimeout:   connectionTimeout,
+		maxSSHConnections:   maxSSHConnections,
+		sshClients:          make(map[string]*ssh.Client),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 }
 
@@ -88,13 +87,13 @@ func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPubl
 func (s *SSHService) Start() error {
 	s.logger.Info().Msg("Starting SSH service...")
 
-	key, err := s.fileClient.ReadFile(s.privateKeyPath)
+	key, err := s.fileClient.ReadFileRaw(s.privateKeyPath)
 	if err != nil {
 		s.logger.Error().Err(err).Str("path", s.privateKeyPath).Msg("Failed to read SSH private key")
 		return fmt.Errorf("failed to read SSH private key: %w", err)
 	}
 
-	privateKey, err := ssh.ParsePrivateKey([]byte(key))
+	privateKey, err := ssh.ParsePrivateKey(key)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to parse SSH private key")
 		return fmt.Errorf("failed to parse SSH private key: %w", err)
@@ -102,13 +101,13 @@ func (s *SSHService) Start() error {
 	s.cachedPrivateKey = privateKey
 	s.logger.Debug().Msg("SSH private key loaded successfully")
 
-	serverKey, err := s.fileClient.ReadFile(s.serverPublicKeyPath)
+	serverKey, err := s.fileClient.ReadFileRaw(s.serverPublicKeyPath)
 	if err != nil {
 		s.logger.Error().Err(err).Str("path", s.serverPublicKeyPath).Msg("Failed to read SSH server public key")
 		return fmt.Errorf("failed to read SSH server public key: %w", err)
 	}
 
-	publicKey, err := ssh.ParsePublicKey([]byte(serverKey))
+	publicKey, err := ssh.ParsePublicKey(serverKey)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("Failed to parse SSH server public key")
 		return fmt.Errorf("failed to parse SSH server public key: %w", err)
@@ -128,20 +127,20 @@ func (s *SSHService) Start() error {
 // Stop terminates the SSH service by unsubscribing from the MQTT topic and closing all SSH connections.
 func (s *SSHService) Stop() error {
 	s.logger.Info().Msg("Stopping SSH service...")
-	
+
 	// Cancel the context to signal all goroutines to stop
 	s.cancel()
-	
+
 	// Unsubscribe from MQTT topic
 	topic := fmt.Sprintf("%s/%s", s.topic, s.deviceInfo.GetDeviceID())
 	if err := s.mqttMiddleware.Unsubscribe(topic); err != nil {
 		s.logger.Error().Err(err).Str("topic", topic).Msg("Failed to unsubscribe from MQTT topic")
 	}
-	
+
 	// Close all SSH connections
 	s.sshClientsMux.Lock()
 	defer s.sshClientsMux.Unlock()
-	
+
 	for host, client := range s.sshClients {
 		if client != nil {
 			if err := client.Close(); err != nil {
@@ -152,10 +151,10 @@ func (s *SSHService) Stop() error {
 		}
 		delete(s.sshClients, host)
 	}
-	
+
 	// Wait for all goroutines to finish
 	s.wg.Wait()
-	
+
 	s.logger.Info().Msg("SSH service stopped successfully")
 	return nil
 }
@@ -225,7 +224,7 @@ func (s *SSHService) EstablishSSHTunnel(request models.SSHRequest) error {
 	if !exists {
 		// Create new connection
 		clientConfig := s.createSSHClientConfig()
-		
+
 		var err error
 		client, err = ssh.Dial("tcp", serverAddr, clientConfig)
 		if err != nil {
@@ -285,14 +284,14 @@ func (s *SSHService) waitUntilDisconnected(client *ssh.Client, backendHost strin
 			_, _, err := client.Conn.SendRequest("keepalive", true, nil)
 			if err != nil {
 				s.logger.Error().Err(err).Str("host", backendHost).Msg("SSH client disconnected")
-				
+
 				// Remove from connections map
 				s.sshClientsMux.Lock()
 				if existingClient, ok := s.sshClients[backendHost]; ok && existingClient == client {
 					delete(s.sshClients, backendHost)
 				}
 				s.sshClientsMux.Unlock()
-				
+
 				return
 			}
 		}

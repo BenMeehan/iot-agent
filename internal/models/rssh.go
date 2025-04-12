@@ -10,6 +10,6 @@ type SSHRequest struct {
 
 // AgentPortInfo represents the port information for the agent.
 type AgentPortInfo struct {
-	RemotePort  int    `json:"rport"`        // Remote port on the backend server
-	LocalPort   int    `json:"lport"`        // Local port on the IoT device
+	RemotePort int `json:"rport"` // Remote port on the backend server
+	LocalPort  int `json:"lport"` // Local port on the IoT device
 }
