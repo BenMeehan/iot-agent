@@ -83,10 +83,11 @@ func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPubl
 	}
 }
 
-// Start initializes the SSH service by loading the private key and subscribing to the MQTT topic.
+// Start initializes the SSH service by loading SSH keys and subscribing to the MQTT topic.
 func (s *SSHService) Start() error {
 	s.logger.Info().Msg("Starting SSH service...")
 
+	// Read and parse the private key
 	key, err := s.fileClient.ReadFileRaw(s.privateKeyPath)
 	if err != nil {
 		s.logger.Error().Err(err).Str("path", s.privateKeyPath).Msg("Failed to read SSH private key")
@@ -101,20 +102,33 @@ func (s *SSHService) Start() error {
 	s.cachedPrivateKey = privateKey
 	s.logger.Debug().Msg("SSH private key loaded successfully")
 
+	// Read and parse the server public key
 	serverKey, err := s.fileClient.ReadFileRaw(s.serverPublicKeyPath)
 	if err != nil {
 		s.logger.Error().Err(err).Str("path", s.serverPublicKeyPath).Msg("Failed to read SSH server public key")
 		return fmt.Errorf("failed to read SSH server public key: %w", err)
 	}
 
-	publicKey, err := ssh.ParsePublicKey(serverKey)
+	// Validate key content
+	if len(serverKey) == 0 {
+		err := errors.New("empty public key file")
+		s.logger.Error().Err(err).Str("path", s.serverPublicKeyPath).Msg("Invalid SSH server public key")
+		return fmt.Errorf("invalid SSH server public key: %w", err)
+	}
+
+	// Log raw key for debugging
+	s.logger.Debug().Str("server_key", string(serverKey)).Msg("Read server public key")
+
+	// Parse the public key in OpenSSH format
+	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(serverKey)
 	if err != nil {
-		s.logger.Error().Err(err).Msg("Failed to parse SSH server public key")
+		s.logger.Error().Err(err).Str("path", s.serverPublicKeyPath).Msg("Failed to parse SSH server public key")
 		return fmt.Errorf("failed to parse SSH server public key: %w", err)
 	}
 	s.cachedServerPublicKey = publicKey
 	s.logger.Debug().Msg("SSH server public key loaded successfully")
 
+	// Subscribe to MQTT topic
 	topic := fmt.Sprintf("%s/%s", s.topic, s.deviceInfo.GetDeviceID())
 	if err := s.subscribeToTopic(topic); err != nil {
 		return err
