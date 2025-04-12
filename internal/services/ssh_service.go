@@ -116,9 +116,6 @@ func (s *SSHService) Start() error {
 		return fmt.Errorf("invalid SSH server public key: %w", err)
 	}
 
-	// Log raw key for debugging
-	s.logger.Debug().Str("server_key", string(serverKey)).Msg("Read server public key")
-
 	// Parse the public key in OpenSSH format
 	publicKey, _, _, _, err := ssh.ParseAuthorizedKey(serverKey)
 	if err != nil {
@@ -199,6 +196,13 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 		Int("backend_port", request.BackendPort).
 		Str("backend_host", request.BackendHost).
 		Msg("Received SSH request")
+
+	err := s.EstablishSSHTunnel(request)
+	if err != nil {
+		s.logger.Error().Err(err).Msg("Failed to establish SSH tunnel")
+		return
+	}
+	s.logger.Debug().Msg("SSH tunnel established successfully")
 }
 
 // createSSHClientConfig creates the SSH client configuration using the cached private key and server public key.
