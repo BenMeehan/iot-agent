@@ -190,7 +190,7 @@ func (s *SSHService) handleSSHRequest(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
-	s.logger.Debug().
+	s.logger.Info().
 		Int("local_port", request.LocalPort).
 		Int("remote_port", request.RemotePort).
 		Int("backend_port", request.BackendPort).
@@ -222,7 +222,7 @@ func (s *SSHService) createSSHClientConfig() *ssh.ClientConfig {
 
 // EstablishSSHTunnel establishes an SSH tunnel to the backend server.
 func (s *SSHService) EstablishSSHTunnel(request models.SSHRequest) error {
-	s.logger.Debug().Msg("Establishing SSH tunnel...")
+	s.logger.Info().Msg("Establishing SSH tunnel...")
 
 	// Check if we've reached maximum connections
 	s.sshClientsMux.Lock()
@@ -276,7 +276,7 @@ func (s *SSHService) EstablishSSHTunnel(request models.SSHRequest) error {
 		return errors.New("failed to register tunnel")
 	}
 
-	s.logger.Info().Msgf("Registered tunnel: port %d → localhost:%d (Session: %s)", request.RemotePort, request.LocalPort, client.SessionID())
+	s.logger.Info().Msgf("Registered tunnel: %s:%d ←→ localhost:%d", request.BackendHost, request.RemotePort, request.LocalPort)
 
 	// Start keepalive monitoring in a goroutine
 	s.wg.Add(1)
