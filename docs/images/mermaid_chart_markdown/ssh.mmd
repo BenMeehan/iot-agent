@@ -1,0 +1,23 @@
+graph TD;
+    A[Start SSHService] --> B[Load SSH Private Key];
+    B --> C[Load Server Public Key];
+
+    C --> D[Subscribe to MQTT Topic];
+    D --> E[Wait for Incoming SSH Request];
+
+    E -- SSH Request Received --> F[Parse and Validate Request];
+    F -- Valid Request --> G[Check SSH Connection Pool];
+
+    G -- Connection Exists --> H[Reuse SSH Client];
+    G -- New Connection Needed --> I[Create New SSH Client];
+    I --> J[Add Client to Pool & Start Channel Handler];
+
+    H --> K[Send Register Request via SSH];
+    J --> K;
+
+    K -- Register Success --> L[Start Keepalive Goroutine];
+    K -- Register Failure --> M[Log Error];
+
+    E -- Stop Request Received --> N[Unsubscribe from MQTT Topic];
+    N --> O[Close All SSH Connections];
+    O --> P[Graceful Shutdown];
