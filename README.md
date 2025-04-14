@@ -54,6 +54,12 @@ To add a new service, follow these steps:
    - Add a new file in `internal/services` (e.g., `new_service.go`).  
    - Implement the service logic, following the pattern of existing services (e.g., `heartbeat_service.go`).
 
+## Middlewares Overview
+
+### 1. Authentication Middlware
+- Handles the JWT based authentication at a central place.
+- Retries Auth requests and refreshes expired tokens.
+
 ## Services Overview
 
 Detailed service documentation is available in the [`/docs`](./docs/) directory.

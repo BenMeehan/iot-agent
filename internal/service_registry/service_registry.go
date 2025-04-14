@@ -171,18 +171,16 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				return services.NewSSHService(
 					config.Services.SSH.Topic,
-					deviceInfo,
-					sr.mqttAuthMiddleware,
-					sr.Logger,
+					config.Services.SSH.QOS,
 					config.Services.SSH.SSHUser,
 					config.Services.SSH.PrivateKeyPath,
+					config.Services.SSH.ServerPublicKeyPath,
+					deviceInfo,
+					sr.mqttAuthMiddleware,
 					sr.fileClient,
-					config.Services.SSH.QOS,
-					config.Services.SSH.MaxListeners,
+					sr.Logger,
 					config.Services.SSH.MaxSSHConnections,
 					config.Services.SSH.ConnectionTimeout,
-					config.Services.SSH.ForwardTimeout,
-					config.Services.SSH.AutoDisconnect,
 				), nil
 			},
 		},
