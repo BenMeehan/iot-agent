@@ -323,7 +323,10 @@ func (s *SSHService) handleAgentChannels(client *ssh.Client) {
 			defer func() {
 				if r := recover(); r != nil {
 					s.logger.Error().Msgf("Recovered from panic: %v", r)
-					nc.Reject(ssh.Prohibited, "internal error")
+					err := nc.Reject(ssh.Prohibited, "internal error")
+					if err != nil {
+						s.logger.Error().Err(err).Msg("Failed to reject channel")
+					}
 				}
 			}()
 
@@ -335,13 +338,21 @@ func (s *SSHService) handleAgentChannels(client *ssh.Client) {
 			}
 
 			if err := ssh.Unmarshal(nc.ExtraData(), &channelData); err != nil {
-				nc.Reject(ssh.Prohibited, "invalid channel data")
+				s.logger.Error().Err(err).Msg("Failed to unmarshal channel data")
+				err := nc.Reject(ssh.Prohibited, "invalid channel data")
+				if err != nil {
+					s.logger.Error().Err(err).Msg("Failed to reject channel")
+				}
 				return
 			}
 
 			conn, err := net.DialTimeout("tcp", channelData.DestAddr, 5*time.Second)
 			if err != nil {
-				nc.Reject(ssh.ConnectionFailed, err.Error())
+				s.logger.Error().Err(err).Str("dest_addr", channelData.DestAddr).Msg("Failed to connect to destination address")
+				err := nc.Reject(ssh.ConnectionFailed, err.Error())
+				if err != nil {
+					s.logger.Error().Err(err).Msg("Failed to reject channel")
+				}
 				return
 			}
 			defer conn.Close()
