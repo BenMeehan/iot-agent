@@ -65,14 +65,15 @@ type Config struct {
 		} `yaml:"ssh"`
 
 		Location struct {
-			Topic             string        `yaml:"topic"`           // MQTT topic for location service
-			Enabled           bool          `yaml:"enabled"`         // Enable/disable location service
-			Interval          time.Duration `yaml:"interval"`        // Interval between geo-location messages (in seconds)
-			QOS               int           `yaml:"qos"`             // MQTT QoS level for location messages
-			SensorBased       bool          `yaml:"sensor_based"`    // Use sensor or geo-location api
-			MapsAPIKey        string        `yaml:"maps_api_key"`    // Google maps API Key
-			GPSDeviceBaudRate int           `yaml:"gps_baud_rate"`   // The Baud rate for GPS sensor
-			GPSDevicePort     string        `yaml:"gps_device_port"` // UNIX Port where the GPS sensor is mounted
+			Topic             string        `yaml:"topic"`              // MQTT topic for location service
+			Enabled           bool          `yaml:"enabled"`            // Enable/disable location service
+			Interval          time.Duration `yaml:"interval"`           // Interval between geo-location messages (in seconds)
+			QOS               int           `yaml:"qos"`                // MQTT QoS level for location messages
+			SensorBased       bool          `yaml:"sensor_based"`       // Use sensor or geo-location api
+			MapsAPIKey        string        `yaml:"maps_api_key"`       // Google maps API Key
+			GPSDeviceBaudRate int           `yaml:"gps_baud_rate"`      // The Baud rate for GPS sensor
+			GPSDevicePort     string        `yaml:"gps_device_port"`    // UNIX Port where the GPS sensor is mounted
+			GPSDeviceTimeout  time.Duration `yaml:"gps_device_timeout"` // Timeout for GPS device (in seconds)
 		} `yaml:"location_service"`
 
 		Update struct {

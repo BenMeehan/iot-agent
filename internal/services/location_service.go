@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
@@ -12,115 +14,146 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// LocationService manages the retrieval and publishing of device location data.
+// LocationService manages the retrieval and publishing of device location data to an MQTT broker.
 type LocationService struct {
-	PubTopic         string
-	Interval         time.Duration
-	DeviceInfo       identity.DeviceInfoInterface
-	QOS              int
+	// Configuration fields
+	topic    string
+	interval time.Duration
+	qos      int
+
+	// Dependencies
+	deviceInfo       identity.DeviceInfoInterface
 	mqttMiddleware   mqtt_middleware.MQTTAuthMiddleware
-	Logger           zerolog.Logger
-	LocationProvider location.Provider
-	stopChan         chan struct{}
-	running          bool
+	logger           zerolog.Logger
+	locationProvider location.Provider
+
+	// Internal state management
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	running bool
 }
 
-// NewLocationService creates and returns a new instance of LocationService.
-func NewLocationService(pubTopic string, interval time.Duration, qos int, deviceInfo identity.DeviceInfoInterface,
+// NewLocationService creates a new LocationService instance with the provided configuration.
+func NewLocationService(topic string, interval time.Duration, qos int, deviceInfo identity.DeviceInfoInterface,
 	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
-
 	return &LocationService{
-		PubTopic:         pubTopic,
-		Interval:         interval,
-		DeviceInfo:       deviceInfo,
-		QOS:              qos,
+		topic:            topic,
+		interval:         interval,
+		qos:              qos,
+		deviceInfo:       deviceInfo,
 		mqttMiddleware:   mqttMiddleware,
-		Logger:           logger,
-		LocationProvider: locationProvider,
-		stopChan:         make(chan struct{}),
+		logger:           logger,
+		locationProvider: locationProvider,
 		running:          false,
 	}
 }
 
-// Start initiates the location service and continuously publishes location messages to the MQTT broker.
+// Start initiates the LocationService, periodically publishing location data to the MQTT broker.
 func (l *LocationService) Start() error {
 	if l.running {
-		l.Logger.Warn().Msg("LocationService is already running")
+		l.logger.Warn().Msg("LocationService is already running")
 		return errors.New("location service is already running")
 	}
 
-	l.stopChan = make(chan struct{})
+	// Initialize context and cancel function
+	l.ctx, l.cancel = context.WithCancel(context.Background())
 	l.running = true
 
+	// Start the location publishing goroutine
+	l.wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(l.Interval)
+		defer l.wg.Done()
+
+		ticker := time.NewTicker(l.interval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
 				if err := l.publishCurrentLocation(); err != nil {
-					l.Logger.Error().Err(err).Msg("Failed to publish current location")
+					l.logger.Error().
+						Err(err).
+						Msg("Failed to publish current location")
 				}
-			case <-l.stopChan:
-				l.Logger.Info().Msg("Stopping LocationService")
+			case <-l.ctx.Done():
+				l.logger.Info().Msg("LocationService is stopping")
 				l.running = false
 				return
 			}
 		}
 	}()
 
-	l.Logger.Info().Str("topic", l.PubTopic).Msg("LocationService started")
+	l.logger.Info().
+		Str("topic", l.topic).
+		Dur("interval_ms", l.interval).
+		Int("qos", l.qos).
+		Msg("LocationService started")
 	return nil
 }
 
-// Stop gracefully stops the location service.
+// Stop gracefully stops the LocationService, ensuring all goroutines are terminated.
 func (l *LocationService) Stop() error {
 	if !l.running {
-		l.Logger.Warn().Msg("LocationService is not running")
+		l.logger.Warn().Msg("LocationService is not running")
 		return errors.New("location service is not running")
 	}
 
-	if l.stopChan == nil {
-		l.Logger.Error().Msg("Failed to stop LocationService: stop channel is nil")
-		return errors.New("stop channel is nil")
-	}
+	// Signal cancellation and wait for the goroutine to exit
+	l.cancel()
+	l.wg.Wait()
 
-	close(l.stopChan)
-	l.running = false
-	l.Logger.Info().Msg("LocationService stopped")
-	return nil
-}
-
-// publishCurrentLocation fetches the location and publishes it to the MQTT broker.
-func (l *LocationService) publishCurrentLocation() error {
-	location, err := l.LocationProvider.GetLocation()
-	if err != nil {
-		l.Logger.Error().Err(err).Msg("Failed to get location from provider")
+	// Close the location provider
+	if err := l.locationProvider.Close(); err != nil {
+		l.logger.Error().Err(err).Msg("Failed to close location provider")
 		return err
 	}
 
+	l.running = false
+	l.logger.Info().Msg("LocationService stopped")
+	return nil
+}
+
+// publishCurrentLocation fetches the current location and publishes it to the MQTT broker.
+func (l *LocationService) publishCurrentLocation() error {
+	// Fetch location from the provider
+	location, err := l.locationProvider.GetLocation()
+	if err != nil {
+		l.logger.Error().
+			Err(err).
+			Msg("Failed to get location from provider")
+		return err
+	}
+
+	// Construct location message
 	locationMessage := models.Location{
-		DeviceID:  l.DeviceInfo.GetDeviceID(),
+		DeviceID:  l.deviceInfo.GetDeviceID(),
 		Timestamp: time.Now(),
 		Latitude:  location.Latitude,
 		Longitude: location.Longitude,
 		Accuracy:  location.Accuracy,
 	}
 
+	// Serialize the location message to JSON
 	payload, err := json.Marshal(locationMessage)
 	if err != nil {
-		l.Logger.Error().Err(err).Msg("Failed to serialize location message")
+		l.logger.Error().Err(err).Msg("Failed to serialize location message")
 		return err
 	}
 
 	// Publish the location message to the MQTT topic
-	err = l.mqttMiddleware.Publish(l.PubTopic, byte(l.QOS), false, payload)
+	err = l.mqttMiddleware.Publish(l.topic, byte(l.qos), false, payload)
 	if err != nil {
-		l.Logger.Error().Err(err).Msg("Failed to publish location message to MQTT")
+		l.logger.Error().
+			Err(err).
+			Str("topic", l.topic).
+			Msg("Failed to publish location message to MQTT")
 		return err
 	}
 
-	l.Logger.Info().Interface("message", locationMessage).Msg("Location published successfully")
+	l.logger.Info().
+		Interface("message", locationMessage).
+		Str("topic", l.topic).
+		Msg("Location published successfully")
 	return nil
 }

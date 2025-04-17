@@ -63,6 +63,7 @@ services:
     maps_api_key: ""
     gps_device_baud_rate: 9600
     gps_device_port: "/dev/ttyACM0"
+    gps_device_timeout: 10s
     enabled: false
   update_service:
     topic: "iot-update"

@@ -190,14 +190,18 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				var provider location.Provider
 				var err error
-				if config.Services.Location.SensorBased {
+				if !config.Services.Location.SensorBased {
+					provider, err = location.NewDeviceSensorProvider(config.Services.Location.GPSDevicePort, config.Services.Location.GPSDeviceBaudRate, config.Services.Location.GPSDeviceTimeout)
+					if err != nil {
+						sr.Logger.Error().Err(err).Msg("failed to create Device Sensor provider")
+						return nil, err
+					}
+				} else {
 					provider, err = location.NewGoogleGeolocationProvider(config.Services.Location.MapsAPIKey)
 					if err != nil {
 						sr.Logger.Error().Err(err).Msg("failed to create Google Geolocation provider")
 						return nil, err
 					}
-				} else {
-					provider = location.NewDeviceSensorProvider(config.Services.Location.GPSDevicePort, config.Services.Location.GPSDeviceBaudRate)
 				}
 				return services.NewLocationService(
 					config.Services.Location.Topic,
