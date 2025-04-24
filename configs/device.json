@@ -1,8 +1,11 @@
 {
-  "device_id": "0194f077-3133-7c00-8567-26e244cb3b61",
-  "device_name": "SmartSensor-001",
+  "device_id": "0196638c-4898-7cb3-a925-a7577e4710d9",
+  "device_name": "Raspberry Pi 5",
   "org_id": "iot-org-123",
   "metadata": {
+    "system_battery": 100,
+    "system_plugged_in": true,
+    "device_type": "microcontroller",
     "network_ip": "192.168.1.100",
     "network_ssid": "IoT-Network",
     "network_signal_strength": -65,
