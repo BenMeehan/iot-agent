@@ -84,42 +84,26 @@ func (fs *FileService) WriteFileRaw(filePath string, data []byte) error {
 
 // WriteJsonFile writes the JSON data to the file at filePath.
 func (fs *FileService) WriteJsonFile(filePath string, data any) error {
-	tempFile := filePath + ".tmp"
-
-	file, err := os.Create(tempFile)
+	file, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
 	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ") // Optional: Pretty-print
-
-	if err := encoder.Encode(data); err != nil {
-		os.Remove(tempFile) // Clean up partial file
-		return err
-	}
-
-	return os.Rename(tempFile, filePath) // Atomic file update
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(data)
 }
 
 // WriteYamlFile writes the YAML data to the file at filePath.
 func (fs *FileService) WriteYamlFile(filePath string, data any) error {
-	tempFile := filePath + ".tmp"
-
-	file, err := os.Create(tempFile)
+	file, err := os.Create(filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
 	encoder := yaml.NewEncoder(file)
-	defer encoder.Close() // Ensure the encoder is properly closed
-
-	if err := encoder.Encode(data); err != nil {
-		os.Remove(tempFile) // Clean up partial file
-		return err
-	}
-
-	return os.Rename(tempFile, filePath) // Atomic file update
+	defer encoder.Close()
+	return encoder.Encode(data)
 }
