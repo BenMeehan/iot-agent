@@ -3,21 +3,41 @@
   "device_name": "Raspberry Pi 5",
   "org_id": "iot-org-123",
   "metadata": {
+    "basic_device_type": "microcontroller",
+    "basic_provisioning_date": "2024-01-15",
+    "basic_time_zone": "UTC+5:30 (IST)",
+    "basic_operating_mode": "Production",
+    "basic_location": "Building 3, Floor 2",
+
+    "system_cpu_usage": "25%",
+    "system_memory_usage": "60%",
+    "system_storage_usage": "40%",
+    "system_temperature": "42°C",
     "system_battery": 100,
     "system_plugged_in": true,
-    "device_type": "microcontroller",
-    "network_ip": "192.168.1.100",
-    "network_ssid": "IoT-Network",
-    "network_signal_strength": -65,
-    "network_mac_address": "00:1A:2B:3C:4D:5E",
-    "hardware_model": "XYZ-2000",
-    "hardware_serial_number": "SN123456789",
-    "hardware_firmware_version": "v1.2.3",
-    "hardware_battery_level": 85,
-    "software_os_version": "Linux 5.4.0",
-    "software_app_version": "2.0.1",
-    "software_last_update": 1674835200,
-    "custom_field_1": "value1",
-    "custom_field_2": "value2"
+
+    "network_mac_address": "DC:A6:32:01:23:45",
+    "network_ip_address": "192.168.1.105",
+    "network_gateway": "192.168.1.1",
+    "network_connection": "Wi-Fi (2.4 GHz)",
+    "network_signal_strength": "80%",
+
+    "hardware_model": "Raspberry Pi 5",
+    "hardware_serial_number": "SN-PI5-123456789ABC",
+    "hardware_processor": "Broadcom BCM2712, Quad-core Arm Cortex-A76 @ 2.4GHz",
+    "hardware_memory": "4GB LPDDR4X RAM",
+    "hardware_storage": "microSD card slot",
+
+    "software_firmware_version": "Raspberry Pi 5 Firmware 2024.11.13",
+    "software_os_version": "Raspberry Pi OS Bookworm (Debian 12)",
+    "software_last_update": "2024-04-15",
+    "software_update_channel": "Stable",
+    "software_auto_update": "on",
+
+    "security_security_level": "High",
+    "security_last_security_scan": "2023-06-18",
+    "security_encryption": "AES-256",
+    "security_firewall_status": "Active",
+    "security_vulnerabilities": "None detected"
   }
 }
