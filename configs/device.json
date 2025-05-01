@@ -1,6 +1,6 @@
 {
-  "device_id": "0196638c-4898-7cb3-a925-a7577e4710d9",
-  "device_name": "Raspberry Pi 5",
+  "device_id": "01968af9-a7da-778f-9a02-b7cd38ab0c95",
+  "device_name": "Nvidia Jetson Nano",
   "org_id": "iot-org-123",
   "metadata": {
     "basic_device_type": "microcontroller",
@@ -8,36 +8,11 @@
     "basic_time_zone": "UTC+5:30 (IST)",
     "basic_operating_mode": "Production",
     "basic_location": "Building 3, Floor 2",
-
     "system_cpu_usage": "25%",
     "system_memory_usage": "60%",
     "system_storage_usage": "40%",
     "system_temperature": "42°C",
     "system_battery": 100,
-    "system_plugged_in": true,
-
-    "network_mac_address": "DC:A6:32:01:23:45",
-    "network_ip_address": "192.168.1.105",
-    "network_gateway": "192.168.1.1",
-    "network_connection": "Wi-Fi (2.4 GHz)",
-    "network_signal_strength": "80%",
-
-    "hardware_model": "Raspberry Pi 5",
-    "hardware_serial_number": "SN-PI5-123456789ABC",
-    "hardware_processor": "Broadcom BCM2712, Quad-core Arm Cortex-A76 @ 2.4GHz",
-    "hardware_memory": "4GB LPDDR4X RAM",
-    "hardware_storage": "microSD card slot",
-
-    "software_firmware_version": "Raspberry Pi 5 Firmware 2024.11.13",
-    "software_os_version": "Raspberry Pi OS Bookworm (Debian 12)",
-    "software_last_update": "2024-04-15",
-    "software_update_channel": "Stable",
-    "software_auto_update": "on",
-
-    "security_security_level": "High",
-    "security_last_security_scan": "2023-06-18",
-    "security_encryption": "AES-256",
-    "security_firewall_status": "Active",
-    "security_vulnerabilities": "None detected"
+    "system_plugged_in": true
   }
 }

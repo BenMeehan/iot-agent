@@ -271,9 +271,22 @@ func (s *SSHService) EstablishSSHTunnel(request models.SSHRequest) error {
 		return fmt.Errorf("failed to marshal SSH request payload: %w", err)
 	}
 
-	ok, _, err := client.SendRequest("register", true, payload)
-	if err != nil || !ok {
-		return errors.New("failed to register tunnel")
+	const maxAttempts = 5
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ok, _, err := client.SendRequest("register", true, payload)
+		if err != nil {
+			s.logger.Error().Err(err).Int("attempt", attempt).Msg("Failed to send register request")
+			return fmt.Errorf("failed to send register request: %w", err)
+		}
+		if ok {
+			break
+		}
+		s.logger.Warn().Int("attempt", attempt).Msg("Register request not accepted (ok=false), retrying...")
+		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+		if attempt == maxAttempts {
+			return errors.New("failed to register tunnel after retries")
+		}
 	}
 
 	s.logger.Info().Msgf("Registered tunnel: %s:%d ←→ localhost:%d", request.BackendHost, request.RemotePort, request.LocalPort)
