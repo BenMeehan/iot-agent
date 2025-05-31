@@ -15,7 +15,7 @@ services:
     topic: "iot-registration"
     qos: 2
     max_backoff_seconds: 60
-    enabled: true
+    enabled: false
   heartbeat:
     topic: "iot-heartbeat"
     interval: 10
@@ -57,3 +57,11 @@ services:
     update_file_path: "updates"
     state_file: "configs/update_state.json"
     enabled: true
+
+    # S3 configs
+    bucket: "versioning-bucket" # Expected to create the versioning bucket manually
+    host: "localhost:9000"
+    accessKeyID: "vbLnvv34R137lVusEQGy"
+    secretAccessKey: "6KPzU4EOAIWjH6zqViXOfoleSG8CLybYsAlAtF7N"
+    useSSL: "false"
+    orgUUID: "org-uuid"

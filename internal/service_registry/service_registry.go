@@ -13,6 +13,7 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/location"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
+	"github.com/benmeehan/iot-agent/pkg/s3"
 	"github.com/rs/zerolog"
 )
 
@@ -25,11 +26,12 @@ type ServiceRegistry struct {
 	encryptionManager encryption.EncryptionManagerInterface
 	jwtManager        jwt.JWTManagerInterface
 	Logger            zerolog.Logger
+	S3                s3.ObjectStorageClient
 }
 
 // NewServiceRegistry initializes a new service registry with dependencies.
 func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
-	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *ServiceRegistry {
+	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger, s3 s3.ObjectStorageClient) *ServiceRegistry {
 	return &ServiceRegistry{
 		services:          make(map[string]Service),
 		mqttClient:        mqttClient,
@@ -37,6 +39,7 @@ func NewServiceRegistry(mqttClient mqtt.MQTTClient, fileClient file.FileOperatio
 		encryptionManager: encryptionManager,
 		jwtManager:        jwtManager,
 		Logger:            logger,
+		S3:                s3,
 	}
 }
 
@@ -226,6 +229,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					sr.Logger,
 					config.Services.Update.StateFile,
 					config.Services.Update.UpdateFilePath,
+					sr.S3,
 				), nil
 			},
 		},

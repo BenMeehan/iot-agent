@@ -28,3 +28,9 @@ type UpdateCommandPayload struct {
 	UpdateStatus   string `json:"update_status,omitempty"`
 	SHA256Checksum string `json:"checksum,omitempty"`
 }
+
+type Partition struct {
+	Device     string
+	MountPoint string
+	PARTUUID   string
+}

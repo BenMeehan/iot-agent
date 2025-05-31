@@ -5,6 +5,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
+	"github.com/benmeehan/iot-agent/pkg/s3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -100,8 +102,22 @@ func main() {
 	}
 	log.Info().Msg("JWT manager initialized successfully")
 
+	// Initialize S3 connection
+	useSSL, _ := strconv.ParseBool(config.Services.Update.UseSSL)
+	s3Client := s3.NewObjectStorage()
+	err = s3Client.Connect(
+		config.Services.Update.Host,
+		config.Services.Update.AccessKeyID,
+		config.Services.Update.SecretAccessKey,
+		useSSL,
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize S3")
+	}
+	log.Info().Msg("S3 initialized successfully")
+
 	// Create and register services
-	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger)
+	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger, s3Client)
 	if err := serviceRegistry.RegisterServices(config, deviceInfo); err != nil {
 		log.Fatal().Err(err).Msg("Failed to register services")
 	}

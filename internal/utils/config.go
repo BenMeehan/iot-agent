@@ -75,6 +75,14 @@ type Config struct {
 			UpdateFilePath string `yaml:"update_file_path"` // Path to save downloaded update files
 			StateFile      string `yaml:"state_file"`       // Path to store the update state
 			Enabled        bool   `yaml:"enabled"`          // Enable/disable update service
+
+			// S3 configs
+			Bucket          string `yaml:"bucket"`
+			Host            string `yaml:"host"`
+			AccessKeyID     string `yaml:"accessKeyID"`
+			SecretAccessKey string `yaml:"secretAccessKey"`
+			UseSSL          string `yaml:"useSSL"`
+			OrgUUID         string `yaml:"orgUUID"`
 		} `yaml:"update_service"`
 	} `yaml:"services"`
 
