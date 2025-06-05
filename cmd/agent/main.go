@@ -5,7 +5,6 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -103,21 +102,22 @@ func main() {
 	log.Info().Msg("JWT manager initialized successfully")
 
 	// Initialize S3 connection
-	useSSL, _ := strconv.ParseBool(config.Services.Update.UseSSL)
-	s3Client := s3.NewObjectStorage()
-	err = s3Client.Connect(
-		config.Services.Update.Host,
-		config.Services.Update.AccessKeyID,
-		config.Services.Update.SecretAccessKey,
-		useSSL,
-	)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize S3")
-	}
-	log.Info().Msg("S3 initialized successfully")
+	// useSSL, _ := strconv.ParseBool(config.Services.Update.UseSSL)
+	// s3Client := s3.NewObjectStorage()
+	// err = s3Client.Connect(
+	// 	config.Services.Update.Host,
+	// 	config.Services.Update.AccessKeyID,
+	// 	config.Services.Update.SecretAccessKey,
+	// 	useSSL,
+	// )
+	// if err != nil {
+	// 	log.Fatal().Err(err).Msg("Failed to initialize S3")
+	// }
+	// log.Info().Msg("S3 initialized successfully")
 
 	// Create and register services
-	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger, s3Client)
+	// serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger, s3Client)
+	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger, &s3.ObjectStorage{})
 	if err := serviceRegistry.RegisterServices(config, deviceInfo); err != nil {
 		log.Fatal().Err(err).Msg("Failed to register services")
 	}

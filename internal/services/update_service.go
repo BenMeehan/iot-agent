@@ -51,16 +51,16 @@ func (u *UpdateService) Start() error {
 		return fmt.Errorf("Current system is not linux. Update service is incompatible with %s", runtime.GOOS)
 	}
 	// Verify system partition
-	// if err := verifySystemPartition(); err != nil {
-	// 	return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
-	// }
+	if err := verifySystemPartition(); err != nil {
+		return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
+	}
 
 	// Check for last updates
 
 	// Subscribe from the MQTT topic and handle update
-	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
-	u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
+	// topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
+	// u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
+	// u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
 
 	return nil
 }
@@ -90,62 +90,68 @@ func verifySystemPartition() error {
 		}
 	}
 
-	// Identify A, B, data, and active partitions
-	var aPartition, bPartition, dataPartition, activePartition models.Partition
-	possibleAPaths := []string{"/a"}
-	possibleBPaths := []string{"/b"}
-	possibleDataPaths := []string{"/data"}
+	// Identify active, inactive, and data partitions
+	var activePartition, inactivePartition, dataPartition models.Partition
+	possibleInactivePaths := []string{"/a", "/b"}
+	possibleDataPaths := []string{"/data", "/userdata"}
 
 	for _, mount := range mounts {
-		switch {
-		case mount.MountPoint == "/":
+		if mount.MountPoint == "/" {
 			activePartition = mount
-		case contains(possibleAPaths, mount.MountPoint):
-			aPartition = mount
-		case contains(possibleBPaths, mount.MountPoint):
-			bPartition = mount
-		case contains(possibleDataPaths, mount.MountPoint):
+		} else if contains(possibleInactivePaths, mount.MountPoint) {
+			inactivePartition = mount
+		} else if contains(possibleDataPaths, mount.MountPoint) {
 			dataPartition = mount
 		}
 	}
 
-	// Print A/B and data partition information
-	fmt.Println("\nPartition Information:")
-	if aPartition.Device != "" {
-		uuid := aPartition.PARTUUID
+	// Print partition information in the requested format
+	fmt.Println("Partition Information:")
+	if activePartition.Device != "" {
+		uuid := activePartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("A Partition: %s (mounted at %s, UUID: %s)\n", aPartition.Device, aPartition.MountPoint, uuid)
+		fmt.Printf("Active Partition: %s (mounted at %s, UUID: %s)\n",
+			activePartition.Device, activePartition.MountPoint, uuid)
 	} else {
-		return fmt.Errorf("A Partition: Not found")
+		fmt.Println("Active Partition: Not found")
 	}
-	if bPartition.Device != "" {
-		uuid := bPartition.PARTUUID
+	if inactivePartition.Device != "" {
+		uuid := inactivePartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("B Partition: %s (mounted at %s, UUID: %s)\n", bPartition.Device, bPartition.MountPoint, uuid)
+		fmt.Printf("Inactive Partition: %s (mounted at %s, UUID: %s)\n",
+			inactivePartition.Device, inactivePartition.MountPoint, uuid)
 	} else {
-		return fmt.Errorf("B Partition: Not found")
+		fmt.Println("Inactive Partition: Not found")
 	}
 	if dataPartition.Device != "" {
 		uuid := dataPartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("Data Partition: %s (mounted at %s, UUID: %s)\n", dataPartition.Device, dataPartition.MountPoint, uuid)
+		fmt.Printf("Data Partition: %s (mounted at %s, UUID: %s)\n",
+			dataPartition.Device, dataPartition.MountPoint, uuid)
 	} else {
-		return fmt.Errorf("Data Partition: Not found")
+		fmt.Println("Data Partition: Not found")
 	}
-	if activePartition.Device != "" {
-		uuid := activePartition.PARTUUID
-		if uuid == "" {
-			uuid = "N/A"
-		}
-		fmt.Printf("Active Partition: %s (mounted at %s, UUID: %s)\n", activePartition.Device, activePartition.MountPoint, uuid)
+
+	// Storing metadata file in data partition
+	_, err = os.Stat(dataPartition.MountPoint + "/metadata.json")
+	if os.IsNotExist(err) {
+		// Agent running for the first time
+		// paritionMetadata := &models.PartitionMetadata{
+		// 	TimeStamp:         time.Now().UTC(),
+		// 	ActivePartition:   activePartition,
+		// 	InActivePartition: inactivePartition,
+		// }
+
+		// json.Marshal()
+
 	} else {
-		return fmt.Errorf("Active Partition: Not found")
+		// Check for previous updates
 	}
 
 	return nil
@@ -167,7 +173,7 @@ func getMounts() ([]models.Partition, error) {
 			continue
 		}
 
-		// Filter for block devices (e.g., /dev/sdb1, /dev/mmcblk0p3)
+		// Filter for block devices (e.g., /dev/mmcblk0p3, /dev/sda1)
 		if strings.HasPrefix(fields[0], "/dev/") {
 			partitions = append(partitions, models.Partition{
 				Device:     fields[0],
@@ -234,7 +240,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		Str("Version", payload.UpdateVersion).
 		Msg("Parsed update command payload")
 
-	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, "test.gz"); err != nil {
+	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, "/home/ghost/Desktop/new/"+payload.FileName); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to download file")
 		return
 	}

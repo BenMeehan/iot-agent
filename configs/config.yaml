@@ -57,6 +57,7 @@ services:
     update_file_path: "updates"
     state_file: "configs/update_state.json"
     enabled: true
+    metadata_file: "updates-metadata.json"
 
     # S3 configs
     bucket: "versioning-bucket" # Expected to create the versioning bucket manually

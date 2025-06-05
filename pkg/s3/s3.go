@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -106,6 +107,13 @@ func (o *ObjectStorage) DownloadFileByPresignedURL(presignedURL string, outputPa
 	// Check if the response status is OK
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Failed to download file, received status code: %d", resp.StatusCode)
+	}
+
+	// Create or check directory
+	fmt.Println(outputPath)
+	dir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("Failed to create directory %s: %v", dir, err)
 	}
 
 	// Create or open the output file
