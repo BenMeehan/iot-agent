@@ -36,19 +36,19 @@ type UpdateCommandPayload struct {
 }
 
 type Partition struct {
-	Device     string
-	MountPoint string
-	PARTUUID   string
+	Device     string `json:"device,omitempty"`
+	MountPoint string `json:"mountPoint,omitempty"`
+	PARTUUID   string `json:"partUUID,omitempty"`
 }
 
 type PartitionMetadata struct {
-	TimeStamp         time.Time
-	ActivePartition   Partition
-	InActivePartition Partition
-	Updates           []UpdatesMetaData
+	TimeStamp         time.Time         `json:"timeStamp,omitempty"`
+	ActivePartition   Partition         `json:"activePartition,omitempty"`
+	InActivePartition Partition         `json:"inActivePartition,omitempty"`
+	Updates           []UpdatesMetaData `json:"updates,omitempty"`
 }
 
 type UpdatesMetaData struct {
-	TimeStamp time.Time
-	Status    string
+	TimeStamp time.Time `json:"timeStamp,omitempty"`
+	Status    string    `json:"status,omitempty"`
 }

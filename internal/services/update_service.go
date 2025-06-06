@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
+	"github.com/benmeehan/iot-agent/internal/constants"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
@@ -21,12 +23,15 @@ import (
 
 // UpdateService struct with FSM
 type UpdateService struct {
-	SubTopic   string
-	DeviceInfo identity.DeviceInfoInterface
-	QOS        int
-	MqttClient mqtt.MQTTClient
-	Logger     zerolog.Logger
-	S3         s3.ObjectStorageClient
+	SubTopic         string
+	DeviceInfo       identity.DeviceInfoInterface
+	QOS              int
+	MqttClient       mqtt.MQTTClient
+	Logger           zerolog.Logger
+	S3               s3.ObjectStorageClient
+	state            constants.UpdateState
+	validTransitions map[constants.UpdateState][]constants.UpdateState
+	dataPartition    models.Partition
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
@@ -41,6 +46,15 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 		MqttClient: mqttClient,
 		Logger:     logger,
 		S3:         s3,
+		state:      constants.UpdateStateIdle, // Assuming an initial state
+		validTransitions: map[constants.UpdateState][]constants.UpdateState{
+			constants.UpdateStateIdle:        {constants.UpdateStateDownloading},
+			constants.UpdateStateDownloading: {constants.UpdateStateInstalling, constants.UpdateStateFailure},
+			// constants.UpdateStateVerifying:   {constants.UpdateStateInstalling, constants.UpdateStateFailure},
+			constants.UpdateStateInstalling: {constants.UpdateStateSuccess, constants.UpdateStateFailure},
+			constants.UpdateStateSuccess:    {},
+			constants.UpdateStateFailure:    {constants.UpdateStateIdle},
+		},
 	}
 }
 
@@ -51,16 +65,16 @@ func (u *UpdateService) Start() error {
 		return fmt.Errorf("Current system is not linux. Update service is incompatible with %s", runtime.GOOS)
 	}
 	// Verify system partition
-	if err := verifySystemPartition(); err != nil {
+	if err := u.verifySystemPartition(); err != nil {
 		return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
 	}
 
 	// Check for last updates
 
 	// Subscribe from the MQTT topic and handle update
-	// topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	// u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
-	// u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
+	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
+	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
+	u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
 
 	return nil
 }
@@ -70,7 +84,7 @@ func (u *UpdateService) Stop() error {
 	return nil
 }
 
-func verifySystemPartition() error {
+func (u *UpdateService) verifySystemPartition() error {
 	// Get all mounted partitions
 	mounts, err := getMounts()
 	if err != nil {
@@ -104,6 +118,9 @@ func verifySystemPartition() error {
 			dataPartition = mount
 		}
 	}
+
+	// Set the data partition to the receiver struct
+	u.dataPartition = dataPartition
 
 	// Print partition information in the requested format
 	fmt.Println("Partition Information:")
@@ -139,19 +156,66 @@ func verifySystemPartition() error {
 	}
 
 	// Storing metadata file in data partition
-	_, err = os.Stat(dataPartition.MountPoint + "/metadata.json")
+	metaDataFile := dataPartition.MountPoint + "/updates-metadata.json"
+	_, err = os.Stat(metaDataFile)
 	if os.IsNotExist(err) {
 		// Agent running for the first time
+		var allPartitionMetadata []models.PartitionMetadata
+
+		paritionMetadata := &models.PartitionMetadata{
+			TimeStamp:         time.Now().UTC(),
+			ActivePartition:   activePartition,
+			InActivePartition: inactivePartition,
+		}
+
+		allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
+
+		jsonData, err := json.Marshal(allPartitionMetadata)
+		if err != nil {
+			return fmt.Errorf("Error marshaling JSON: %v", err)
+		}
+
+		err = os.WriteFile(metaDataFile, jsonData, 0644)
+		if err != nil {
+			return fmt.Errorf("Error marshaling JSON: %v", err)
+		}
+
+	} else {
+		// Read metadata file and check for previous updates
+		// var allPartitionMetadata []models.PartitionMetadata
+
+		// metadataContent, err := os.ReadFile(metaDataFile)
+		// if err != nil {
+		// 	return fmt.Errorf("Error reading metadata file: %v", err)
+		// }
+
+		// err = json.Unmarshal(metadataContent, &allPartitionMetadata)
+		// if err != nil {
+		// 	return fmt.Errorf("Error unmarshaling JSON: %v", err)
+		// }
+
+		// lastMetadata := allPartitionMetadata[len(allPartitionMetadata) - 1]
+
+		// lastMetadata.Updates[len(lastMetadata.Updates) - 1].Status !=
+
 		// paritionMetadata := &models.PartitionMetadata{
 		// 	TimeStamp:         time.Now().UTC(),
 		// 	ActivePartition:   activePartition,
 		// 	InActivePartition: inactivePartition,
 		// }
 
-		// json.Marshal()
+		// allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
 
-	} else {
-		// Check for previous updates
+		// jsonData, err := json.Marshal(allPartitionMetadata)
+		// if err != nil {
+		// 	return fmt.Errorf("Error marshaling JSON: %v", err)
+		// }
+
+		// err = os.WriteFile(metaDataFile, jsonData, 0644)
+		// if err != nil {
+		// 	return fmt.Errorf("Error writing metadata file: %v", err)
+		// }
+
 	}
 
 	return nil
@@ -240,8 +304,23 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		Str("Version", payload.UpdateVersion).
 		Msg("Parsed update command payload")
 
-	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, "/home/ghost/Desktop/new/"+payload.FileName); err != nil {
+	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, u.dataPartition.MountPoint+"/"+payload.FileName); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to download file")
 		return
 	}
+	fmt.Println("downloaded...")
+}
+
+// isValidTransition checks if the transition between states is valid
+func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
+	validStates, exists := u.validTransitions[u.state]
+	if !exists {
+		return false
+	}
+	for _, validState := range validStates {
+		if newState == validState {
+			return true
+		}
+	}
+	return false
 }

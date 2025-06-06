@@ -119,7 +119,7 @@ func (o *ObjectStorage) DownloadFileByPresignedURL(presignedURL string, outputPa
 	// Create or open the output file
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		fmt.Errorf("Failed to create output file %s: %v", outputPath, err)
+		return fmt.Errorf("Failed to create output file %s: %v", outputPath, err)
 	}
 	defer outFile.Close()
 
