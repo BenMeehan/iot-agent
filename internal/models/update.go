@@ -42,13 +42,20 @@ type Partition struct {
 }
 
 type PartitionMetadata struct {
-	TimeStamp         time.Time         `json:"timeStamp,omitempty"`
-	ActivePartition   Partition         `json:"activePartition,omitempty"`
-	InActivePartition Partition         `json:"inActivePartition,omitempty"`
+	TimeStamp         time.Time         `json:"time_stamp,omitempty"`
+	ActivePartition   Partition         `json:"active_partition,omitempty"`
+	InActivePartition Partition         `json:"inactive_partition,omitempty"`
 	Updates           []UpdatesMetaData `json:"updates,omitempty"`
 }
 
 type UpdatesMetaData struct {
-	TimeStamp time.Time `json:"timeStamp,omitempty"`
+	TimeStamp time.Time `json:"time_stamp,omitempty"`
 	Status    string    `json:"status,omitempty"`
+	ErrorLog  string    `json:"error_log,omitempty"`
+}
+
+type StatusUpdatePayload struct {
+	UpdateId string `json:"update_id"`
+	DeviceId string `json:"device_id"`
+	Status   string `json:"status"`
 }

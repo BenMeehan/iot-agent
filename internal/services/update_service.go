@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,6 +61,10 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
+	// NEED TO RESUME FROM PREVIOUS STATE
+	u.setState(constants.UpdateStateIdle)
+	fmt.Printf("Start state: %s\n", u.state)
+
 	// Check if system is linux
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("Current system is not linux. Update service is incompatible with %s", runtime.GOOS)
@@ -290,8 +295,6 @@ func contains(slice []string, item string) bool {
 
 // handleUpdateCommand processes incoming MQTT update commands
 func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message) {
-	u.Logger.Info().Msg("Received update command")
-
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
@@ -304,11 +307,61 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		Str("Version", payload.UpdateVersion).
 		Msg("Parsed update command payload")
 
+	// Proceed with the downloading state
+	if err := u.setState(constants.UpdateStateDownloading); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to set state to downloading")
+	}
+
+	// Send mqtt message and get acknowledgment for downloading
+	sharedTopic := "share/status/agent-updates"
+
+	mqttPayload := &models.StatusUpdatePayload{
+		UpdateId: payload.ID,
+		DeviceId: u.DeviceInfo.GetDeviceID(),
+		Status:   string(u.state),
+	}
+	mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+		return
+	}
+
+	token := u.MqttClient.Publish(sharedTopic, byte(2), false, mqttPayloadBytes)
+	token.Wait()
+	if token.Error() != nil {
+		u.Logger.Error().Err(token.Error()).Msg("Failed to publish")
+	} else {
+		u.Logger.Info().Str("status", "success").Msg("Published to " + sharedTopic)
+	}
+
 	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, u.dataPartition.MountPoint+"/"+payload.FileName); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to download file")
 		return
 	}
-	fmt.Println("downloaded...")
+
+}
+
+// setState sets the current update state and saves it to disk
+func (u *UpdateService) setState(newState constants.UpdateState) error {
+	if !u.isValidTransition(newState) {
+		err := errors.New("invalid state transition")
+		u.Logger.Error().
+			Str("currentState", string(u.state)).
+			Str("newState", string(newState)).
+			Err(err).
+			Msg("State transition denied")
+		return err
+	}
+
+	u.state = newState
+	// stateData := struct{ State constants.UpdateState }{newState}
+	// if err := u.FileClient.WriteJsonFile(u.StateFile, stateData); err != nil {
+	// 	u.Logger.Error().Err(err).Msg("Failed to persist state")
+	// 	return err
+	// }
+
+	u.Logger.Info().Str("state", string(newState)).Msg("Update state updated")
+	return nil
 }
 
 // isValidTransition checks if the transition between states is valid
