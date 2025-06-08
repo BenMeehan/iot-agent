@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,15 +25,18 @@ import (
 
 // UpdateService struct with FSM
 type UpdateService struct {
-	SubTopic         string
-	DeviceInfo       identity.DeviceInfoInterface
-	QOS              int
-	MqttClient       mqtt.MQTTClient
-	Logger           zerolog.Logger
-	S3               s3.ObjectStorageClient
+	SubTopic   string
+	DeviceInfo identity.DeviceInfoInterface
+	QOS        int
+	MqttClient mqtt.MQTTClient
+	Logger     zerolog.Logger
+	S3         s3.ObjectStorageClient
+
 	state            constants.UpdateState
 	validTransitions map[constants.UpdateState][]constants.UpdateState
 	dataPartition    models.Partition
+	ackChannel       chan models.Ack
+	wg               sync.WaitGroup
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
@@ -80,6 +84,11 @@ func (u *UpdateService) Start() error {
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
 	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
 	u.Logger.Info().Str("topic", topic).Msg("Subscribed to MQTT update topic")
+
+	// Subscribe for acknowledgment messages
+	ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
+	u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleAckMessages)
+	u.Logger.Info().Str("topic", ackTopic).Msg("Subscribed to MQTT update topic")
 
 	return nil
 }
@@ -313,7 +322,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	}
 
 	// Send mqtt message and get acknowledgment for downloading
-	sharedTopic := "share/status/agent-updates"
+	sharedTopic := "agent-updates"
 
 	mqttPayload := &models.StatusUpdatePayload{
 		UpdateId: payload.ID,
@@ -329,16 +338,83 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 	token := u.MqttClient.Publish(sharedTopic, byte(2), false, mqttPayloadBytes)
 	token.Wait()
 	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to publish")
+		u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
+		return
 	} else {
 		u.Logger.Info().Str("status", "success").Msg("Published to " + sharedTopic)
 	}
 
-	if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, u.dataPartition.MountPoint+"/"+payload.FileName); err != nil {
-		u.Logger.Error().Err(err).Msg("Failed to download file")
+	// go routine for proceeding with next steps
+	go func() {
+		// Add to wait group
+		u.wg.Add(1)
+		defer u.wg.Done()
+
+		// Wait for acknowledgment
+		select {
+		case ack := <-u.ackChannel:
+			if ack.Status == string(constants.UpdateStateDownloading) {
+				// Download file the file and send mqtt message for installing
+				if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, u.dataPartition.MountPoint+"/"+payload.FileName); err != nil {
+					u.Logger.Error().Err(err).Msg("Failed to download file")
+					return
+				}
+
+				// Update state to installing and send mqtt request
+				u.setState(constants.UpdateStateInstalling)
+				mqttPayload := &models.StatusUpdatePayload{
+					UpdateId: payload.ID,
+					DeviceId: u.DeviceInfo.GetDeviceID(),
+					Status:   string(u.state),
+				}
+				mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+				if err != nil {
+					u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+					return
+				}
+
+				token := u.MqttClient.Publish(sharedTopic, byte(2), false, mqttPayloadBytes)
+				token.Wait()
+				if token.Error() != nil {
+					u.Logger.Error().Err(token.Error()).Msg("Failed to publish for installing message")
+					return
+				} else {
+					u.Logger.Info().Str("status", "success").Msg("Published to " + sharedTopic)
+				}
+
+			} else if ack.Status == string(constants.UpdateStateInstalling) {
+				// Install the update and send mqtt message for success
+				updateFileLocation := u.dataPartition.MountPoint + "/" + payload.FileName
+				if _, err := os.Stat(updateFileLocation); os.IsNotExist(err) {
+					u.Logger.Error().Err(err).Msg(fmt.Sprintf("zip file does not exist in device: %s", updateFileLocation))
+					return
+				}
+
+			} else if ack.Status == string(constants.UpdateStateSuccess) {
+				// Success and write the metadata file
+
+			} else {
+				// Error when sending mqtt request
+			}
+		case <-time.After(10 * time.Second):
+			// Retry
+
+		}
+	}()
+
+}
+
+// handleAckMessages processes incoming Acknowledgment MQTT messages
+func (u *UpdateService) handleAckMessages(client MQTT.Client, msg MQTT.Message) {
+	// Parse Acknowledgment message
+	var payload models.Ack
+	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to parse ack message payload")
 		return
 	}
 
+	// Send acknowledgment to channel
+	u.ackChannel <- payload
 }
 
 // setState sets the current update state and saves it to disk
