@@ -66,6 +66,7 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
 	u.ackChannel = make(chan models.Ack, 10000)
+	u.wg.Add(1)
 	// NEED TO RESUME FROM PREVIOUS STATE
 	//u.setState(constants.UpdateStateIdle)
 	fmt.Printf("Start state: %s\n", u.state)
@@ -361,13 +362,12 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 
 	// go routine for proceeding with next steps
 	go func() {
-		// Add to wait group
-		u.wg.Add(1)
 		defer u.wg.Done()
 
 		// Wait for acknowledgment
-		select {
-		case ack := <-u.ackChannel:
+		// select {
+		// case ack := <-u.ackChannel:
+		for ack := range u.ackChannel {
 			fmt.Println("ACK: ", ack)
 			if ack.Status == string(constants.UpdateStateDownloading) {
 				fmt.Println("DOWNLOADING...")
@@ -412,9 +412,9 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 					return
 				}
 
-				fmt.Println(updateZipFileLocation)
 				// Unzip the .zip file
-				cmd := exec.Command("unzip", updateZipFileLocation)
+				fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
+				cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint) // -o to overwrite if extract already exists
 				_, err := cmd.CombinedOutput()
 				if err != nil {
 					u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
@@ -422,6 +422,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 				}
 
 				updateFileLocation := updateZipFileLocation[:len(updateZipFileLocation)-4]
+				fmt.Println(updateFileLocation)
 
 				// Check if file has .deb extension
 				if !strings.HasSuffix(strings.ToLower(updateFileLocation), ".deb") {
@@ -430,7 +431,7 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 				}
 
 				// Install .deb update file
-				cmd = exec.Command("dpkg", "-i", updateZipFileLocation)
+				cmd = exec.Command("dpkg", "-i", updateFileLocation)
 				_, err = cmd.CombinedOutput()
 				if err != nil {
 					u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error installing update: %v", err))
@@ -473,9 +474,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 			} else {
 				// Error when sending mqtt request
 			}
-		case <-time.After(10 * time.Second):
-			// Retry
+			// case <-time.After(10 * time.Second):
+			// 	// Retry
 
+			// }
 		}
 	}()
 	fmt.Println("Go routine end")
