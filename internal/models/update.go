@@ -42,14 +42,16 @@ type Partition struct {
 }
 
 type PartitionMetadata struct {
-	TimeStamp         time.Time         `json:"time_stamp,omitempty"`
-	ActivePartition   Partition         `json:"active_partition,omitempty"`
-	InActivePartition Partition         `json:"inactive_partition,omitempty"`
-	Updates           []UpdatesMetaData `json:"updates,omitempty"`
+	TimeStamp         time.Time       `json:"time_stamp,omitempty"`
+	ActivePartition   Partition       `json:"active_partition,omitempty"`
+	InActivePartition Partition       `json:"inactive_partition,omitempty"`
+	Update            UpdatesMetaData `json:"update,omitempty"`
 }
 
 type UpdatesMetaData struct {
 	TimeStamp time.Time `json:"time_stamp,omitempty"`
+	FileName  string    `json:"file_name"`
+	Version   string    `json:"version"`
 	Status    string    `json:"status,omitempty"`
 	ErrorLog  string    `json:"error_log,omitempty"`
 }

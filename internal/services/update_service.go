@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
@@ -20,7 +23,6 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/benmeehan/iot-agent/pkg/s3"
-	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
 
 // UpdateService struct with FSM
@@ -31,12 +33,15 @@ type UpdateService struct {
 	MqttClient mqtt.MQTTClient
 	Logger     zerolog.Logger
 	S3         s3.ObjectStorageClient
+	FileClient file.FileOperations
 
 	state            constants.UpdateState
 	validTransitions map[constants.UpdateState][]constants.UpdateState
 	dataPartition    models.Partition
 	ackChannel       chan models.Ack
 	wg               sync.WaitGroup
+	metadataFile     string
+	metadataContent  models.PartitionMetadata
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
@@ -51,9 +56,11 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 		MqttClient: mqttClient,
 		Logger:     logger,
 		S3:         s3,
-		state:      constants.UpdateStateIdle, // Assuming an initial state
+		FileClient: fileClient,
+
+		state: constants.UpdateStateIdle, // Assuming an initial state
 		validTransitions: map[constants.UpdateState][]constants.UpdateState{
-			constants.UpdateStateIdle:        {constants.UpdateStateDownloading},
+			constants.UpdateStateIdle:        {constants.UpdateStateDownloading, constants.UpdateStateFailure},
 			constants.UpdateStateDownloading: {constants.UpdateStateInstalling, constants.UpdateStateFailure},
 			// constants.UpdateStateVerifying:   {constants.UpdateStateInstalling, constants.UpdateStateFailure},
 			constants.UpdateStateInstalling: {constants.UpdateStateSuccess, constants.UpdateStateFailure},
@@ -65,7 +72,7 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
-	u.ackChannel = make(chan models.Ack, 10000)
+	u.ackChannel = make(chan models.Ack)
 	u.wg.Add(1)
 	// NEED TO RESUME FROM PREVIOUS STATE
 	//u.setState(constants.UpdateStateIdle)
@@ -75,7 +82,8 @@ func (u *UpdateService) Start() error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("Current system is not linux. Update service is incompatible with %s", runtime.GOOS)
 	}
-	// Verify system partition
+
+	// Verify system partition and write metadata file
 	if err := u.verifySystemPartition(); err != nil {
 		return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
 	}
@@ -185,67 +193,74 @@ func (u *UpdateService) verifySystemPartition() error {
 	}
 
 	// Storing metadata file in data partition
-	metaDataFile := dataPartition.MountPoint + "/updates-metadata.json"
-	_, err = os.Stat(metaDataFile)
-	if os.IsNotExist(err) {
-		// Agent running for the first time
-		var allPartitionMetadata []models.PartitionMetadata
-
-		paritionMetadata := &models.PartitionMetadata{
-			TimeStamp:         time.Now().UTC(),
-			ActivePartition:   activePartition,
-			InActivePartition: inactivePartition,
-		}
-
-		allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
-
-		jsonData, err := json.Marshal(allPartitionMetadata)
-		if err != nil {
-			return fmt.Errorf("Error marshaling JSON: %v", err)
-		}
-
-		err = os.WriteFile(metaDataFile, jsonData, 0644)
-		if err != nil {
-			return fmt.Errorf("Error marshaling JSON: %v", err)
-		}
-
-	} else {
-		// Read metadata file and check for previous updates
-		// var allPartitionMetadata []models.PartitionMetadata
-
-		// metadataContent, err := os.ReadFile(metaDataFile)
-		// if err != nil {
-		// 	return fmt.Errorf("Error reading metadata file: %v", err)
-		// }
-
-		// err = json.Unmarshal(metadataContent, &allPartitionMetadata)
-		// if err != nil {
-		// 	return fmt.Errorf("Error unmarshaling JSON: %v", err)
-		// }
-
-		// lastMetadata := allPartitionMetadata[len(allPartitionMetadata) - 1]
-
-		// lastMetadata.Updates[len(lastMetadata.Updates) - 1].Status !=
-
-		// paritionMetadata := &models.PartitionMetadata{
-		// 	TimeStamp:         time.Now().UTC(),
-		// 	ActivePartition:   activePartition,
-		// 	InActivePartition: inactivePartition,
-		// }
-
-		// allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
-
-		// jsonData, err := json.Marshal(allPartitionMetadata)
-		// if err != nil {
-		// 	return fmt.Errorf("Error marshaling JSON: %v", err)
-		// }
-
-		// err = os.WriteFile(metaDataFile, jsonData, 0644)
-		// if err != nil {
-		// 	return fmt.Errorf("Error writing metadata file: %v", err)
-		// }
-
+	u.metadataFile = dataPartition.MountPoint + "/updates-metadata.json"
+	u.metadataContent = models.PartitionMetadata{
+		TimeStamp:         time.Now().UTC(),
+		ActivePartition:   activePartition,
+		InActivePartition: inactivePartition,
 	}
+	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+	// _, err = os.Stat(metaDataFile)
+	// if os.IsNotExist(err) {
+	// 	// Agent running for the first time
+	// 	// var allPartitionMetadata []models.PartitionMetadata
+
+	// 	// paritionMetadata := &models.PartitionMetadata{
+	// 	// 	TimeStamp:         time.Now().UTC(),
+	// 	// 	ActivePartition:   activePartition,
+	// 	// 	InActivePartition: inactivePartition,
+	// 	// }
+
+	// 	// allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
+
+	// 	// jsonData, err := json.Marshal(allPartitionMetadata)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error marshaling JSON: %v", err)
+	// 	// }
+
+	// 	// err = os.WriteFile(metaDataFile, jsonData, 0644)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error marshaling JSON: %v", err)
+	// 	// }
+
+	// } else {
+	// 	// Read metadata file and check for previous updates
+	// 	// var allPartitionMetadata []models.PartitionMetadata
+
+	// 	// metadataContent, err := os.ReadFile(metaDataFile)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error reading metadata file: %v", err)
+	// 	// }
+
+	// 	// err = json.Unmarshal(metadataContent, &allPartitionMetadata)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error unmarshaling JSON: %v", err)
+	// 	// }
+
+	// 	// lastMetadata := allPartitionMetadata[len(allPartitionMetadata) - 1]
+
+	// 	// lastMetadata.Updates[len(lastMetadata.Updates) - 1].Status !=
+
+	// 	// paritionMetadata := &models.PartitionMetadata{
+	// 	// 	TimeStamp:         time.Now().UTC(),
+	// 	// 	ActivePartition:   activePartition,
+	// 	// 	InActivePartition: inactivePartition,
+	// 	// }
+
+	// 	// allPartitionMetadata = append(allPartitionMetadata, *paritionMetadata)
+
+	// 	// jsonData, err := json.Marshal(allPartitionMetadata)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error marshaling JSON: %v", err)
+	// 	// }
+
+	// 	// err = os.WriteFile(metaDataFile, jsonData, 0644)
+	// 	// if err != nil {
+	// 	// 	return fmt.Errorf("Error writing metadata file: %v", err)
+	// 	// }
+
+	// }
 
 	return nil
 }
@@ -331,6 +346,37 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 		Str("Version", payload.UpdateVersion).
 		Msg("Parsed update command payload")
 
+	// Create the update metadata
+	updateMetadata := models.UpdatesMetaData{
+		TimeStamp: time.Now().UTC(),
+		FileName:  payload.FileName,
+		Version:   payload.UpdateVersion,
+		Status:    string(u.state),
+		ErrorLog:  "",
+	}
+
+	// Check if the version is new
+	isNewVersionUpdate, err := u.isNewVersion("0.0.0")
+	if err != nil {
+		u.setState(constants.UpdateStateFailure)
+		updateMetadata.ErrorLog = fmt.Sprintf("Error validating version: %v", err)
+		u.metadataContent.Update = updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg("Error validating version")
+		return
+	}
+
+	if !isNewVersionUpdate {
+		u.setState(constants.UpdateStateFailure)
+		updateMetadata.ErrorLog = fmt.Sprintf("Version should be greater than current version")
+		u.metadataContent.Update = updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg("Error validating version")
+		return
+	}
+
 	// Proceed with the downloading state
 	if err := u.setState(constants.UpdateStateDownloading); err != nil {
 		u.Logger.Error().Err(err).Msg("Error updating state from idle to downloading")
@@ -371,6 +417,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 			fmt.Println("ACK: ", ack)
 			if ack.Status == string(constants.UpdateStateDownloading) {
 				fmt.Println("DOWNLOADING...")
+				updateMetadata.Status = string(u.state)
+				u.metadataContent.Update = updateMetadata
+				u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
 				// Download file the file and send mqtt message for installing
 				if err := u.S3.DownloadFileByPresignedURL(payload.FileUrl, u.dataPartition.MountPoint+"/"+payload.FileName); err != nil {
 					u.Logger.Error().Err(err).Msg("Failed to download file")
@@ -405,6 +455,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 
 			} else if ack.Status == string(constants.UpdateStateInstalling) {
 				fmt.Println("INSTALLING...")
+				updateMetadata.Status = string(u.state)
+				u.metadataContent.Update = updateMetadata
+				u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
 				// Install the update and send mqtt message for success
 				updateZipFileLocation := u.dataPartition.MountPoint + "/" + payload.FileName
 				if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
@@ -465,6 +519,10 @@ func (u *UpdateService) handleUpdateCommand(client MQTT.Client, msg MQTT.Message
 				}
 
 			} else if ack.Status == string(constants.UpdateStateSuccess) {
+				fmt.Println("Success")
+				updateMetadata.Status = string(u.state)
+				u.metadataContent.Update = updateMetadata
+				u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 				// Success and write the metadata file
 				// metaDataFile := u.dataPartition.MountPoint + "/updates-metadata.json"
 				// metadataContent, err := os.ReadFile(metaDataFile)
@@ -534,4 +592,37 @@ func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
 		}
 	}
 	return false
+}
+
+// isNewVersion checks if the new version is newer than the current version using semantic versioning
+func (u *UpdateService) isNewVersion(newVersion string) (bool, error) {
+	currentVersionStr, err := u.readCurrentVersion()
+	if err != nil {
+		return false, err
+	}
+	fmt.Println(currentVersionStr)
+
+	// Parse the current and new version strings into semver.Version
+	currentVersion, err := semver.NewVersion(currentVersionStr)
+	if err != nil {
+		return false, errors.New("invalid current version format")
+	}
+
+	newVersionParsed, err := semver.NewVersion(newVersion)
+	if err != nil {
+		return false, errors.New("invalid new version format")
+	}
+
+	// Compare the versions
+	return newVersionParsed.GreaterThan(currentVersion), nil
+}
+
+// readCurrentVersion reads the current version from configs/version.txt
+func (u *UpdateService) readCurrentVersion() (string, error) {
+	versionFile := filepath.Join("configs", "version.txt")
+	data, err := u.FileClient.ReadFile(versionFile)
+	if err != nil {
+		return "", err
+	}
+	return data, nil
 }
