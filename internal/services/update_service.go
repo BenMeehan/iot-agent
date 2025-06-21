@@ -74,8 +74,6 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 func (u *UpdateService) Start() error {
 	u.ackChannel = make(chan models.Ack)
 
-	// NEED TO RESUME FROM PREVIOUS STATE
-	//u.setState(constants.UpdateStateIdle)
 	fmt.Printf("Start state: %s\n", u.state)
 
 	// Check if system is linux
@@ -88,8 +86,71 @@ func (u *UpdateService) Start() error {
 		return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
 	}
 
-	// Check for last updates
+	// NEED TO RESUME FROM PREVIOUS UPDATE STATE
+	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
+	if isFileExists {
+		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
+		if err != nil {
+			return fmt.Errorf("Error reading metadata file: %v", err)
+		}
 
+		if err := json.Unmarshal([]byte(metadataFileContent), &u.metadataContent); err != nil {
+			return fmt.Errorf("Error unmashal metadata file: %v", err)
+		}
+
+		prevState := u.metadataContent.Update.Status
+		if prevState == string(constants.UpdateStateDownloading) {
+			u.SubscribeMQTTEndpoint()
+		} else if prevState == string(constants.UpdateStateInstalling) {
+
+		} else if prevState == string(constants.UpdateStateSuccess) {
+
+		}
+	} else {
+		// If file exists and can't read because of permission issues
+		if err != nil {
+			return fmt.Errorf("Unable to read metadata file: %v", err)
+		}
+
+		// File does not exist
+		if err := u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent); err != nil {
+			return fmt.Errorf("Unable to write metadata file: %v", err)
+		}
+		u.SubscribeMQTTEndpoint()
+	}
+
+	// // Subscribe for acknowledgment messages
+	// ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
+	// token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
+	// token.Wait()
+	// if token.Error() != nil {
+	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + ackTopic)
+	// } else {
+	// 	u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
+	// }
+
+	// // Subscribe from the MQTT topic and handle update
+	// topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
+	// token = u.MqttClient.Subscribe(topic, byte(u.QOS), u.handleUpdateCommand)
+	// token.Wait()
+	// if token.Error() != nil {
+	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + topic)
+	// } else {
+	// 	u.Logger.Info().Str("topic", topic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", topic))
+	// }
+
+	// u.Logger.Info().Msg("Starting wait group")
+	// u.wg.Wait()
+
+	return nil
+}
+
+// Stop
+func (u *UpdateService) Stop() error {
+	return nil
+}
+
+func (u *UpdateService) SubscribeMQTTEndpoint() {
 	// Subscribe for acknowledgment messages
 	ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
 	token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
@@ -112,13 +173,6 @@ func (u *UpdateService) Start() error {
 
 	u.Logger.Info().Msg("Starting wait group")
 	u.wg.Wait()
-
-	return nil
-}
-
-// Stop
-func (u *UpdateService) Stop() error {
-	return nil
 }
 
 func (u *UpdateService) verifySystemPartition() error {
@@ -199,7 +253,6 @@ func (u *UpdateService) verifySystemPartition() error {
 		ActivePartition:   activePartition,
 		InActivePartition: inactivePartition,
 	}
-	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
 	return nil
 }

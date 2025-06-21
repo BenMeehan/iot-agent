@@ -10,6 +10,7 @@ import (
 
 // FileOperations defines methods for reading from and writing to files.
 type FileOperations interface {
+	IsFileExists(filePath string) (bool, error)
 	ReadFile(filePath string) (string, error)
 	ReadFileRaw(filePath string) ([]byte, error)
 	ReadJsonFile(filePath string, v any) error
@@ -26,6 +27,17 @@ type FileService struct{}
 // NewFileService creates a new instance of FileService.
 func NewFileService() *FileService {
 	return &FileService{}
+}
+
+// IsFileExist checks if the file exists and returns boolean and error
+func (fs *FileService) IsFileExists(filePath string) (bool, error) {
+	_, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+
+	// checking err == nil because of permission related error
+	return err == nil, err
 }
 
 // ReadFile reads the contents of the file at filePath and returns it as a string.
