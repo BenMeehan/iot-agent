@@ -27,7 +27,7 @@ type UpdateInstruction struct {
 //	UpdateURL: The URL from where the update files should be downloaded.
 //	Version: The version of the update, used to check if the update is newer than the current version.
 type UpdateCommandPayload struct {
-	ID             string `json:"id,omitempty"`
+	ID             string `json:"update_id,omitempty"`
 	UpdateVersion  string `json:"update_version,omitempty"`
 	FileName       string `json:"update_file_name,omitempty"`
 	FileUrl        string `json:"update_file_url,omitempty"`
@@ -50,7 +50,9 @@ type PartitionMetadata struct {
 
 type UpdatesMetaData struct {
 	TimeStamp time.Time `json:"time_stamp,omitempty"`
+	UpdateId  string    `json:"update_id"`
 	FileName  string    `json:"file_name"`
+	FileUrl   string    `json:"update_file_url,omitempty"`
 	Version   string    `json:"version"`
 	Status    string    `json:"status,omitempty"`
 	ErrorLog  string    `json:"error_log,omitempty"`
@@ -63,6 +65,7 @@ type StatusUpdatePayload struct {
 }
 
 type Ack struct {
-	Status string `json:"status"`
-	Error  string `json:"error"`
+	UpdateId string `json:"update_id"`
+	Status   string `json:"status"`
+	Error    string `json:"error"`
 }
