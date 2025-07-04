@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -369,10 +368,10 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
-	u.Logger.Info().
-		Str("UpdateURL", payload.FileUrl).
-		Str("Version", payload.UpdateVersion).
-		Msg("Parsed update command payload")
+	// u.Logger.Info().
+	// 	Str("UpdateURL", payload.FileUrl).
+	// 	Str("Version", payload.UpdateVersion).
+	// 	Msg("Parsed update command payload")
 
 	// Create the update metadata
 	u.updateMetadata = models.UpdatesMetaData{
@@ -385,8 +384,29 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		ErrorLog:  "",
 	}
 
+	// Old version
+	var localMetadataFileContent models.PartitionMetadata
+	oldVersion := "0.0.0"
+	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
+	if isFileExists {
+		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
+		if err != nil {
+			u.Logger.Error().Err(err).Msg("Error reading metadata file")
+			return
+		}
+
+		if err := json.Unmarshal([]byte(metadataFileContent), &localMetadataFileContent); err != nil {
+			u.Logger.Error().Err(err).Msg("Error unmashal metadata file")
+			return
+		}
+
+		if localMetadataFileContent.Update.Version != "" {
+			oldVersion = localMetadataFileContent.Update.Version
+		}
+	}
+
 	// Check if the version is new
-	isNewVersionUpdate, err := u.isNewVersion(payload.UpdateVersion)
+	isNewVersionUpdate, err := u.isNewVersion(oldVersion, payload.UpdateVersion)
 	if err != nil {
 		u.setState(constants.UpdateStateFailure)
 		u.updateMetadata.Status = string(u.state)
@@ -399,13 +419,6 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	}
 
 	if !isNewVersionUpdate {
-		u.setState(constants.UpdateStateFailure)
-		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Version should be greater than current version")
-		u.metadataContent.Update = u.updateMetadata
-		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
-
-		u.Logger.Error().Err(err).Msg("Error validating version")
 		return
 	}
 
@@ -441,6 +454,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	u.UpdateProcssFlow()
 }
 func (u *UpdateService) UpdateProcssFlow() {
+
 	retry := 1
 	sharedAckTopic := "agent-updates"
 	u.wg.Add(1)
@@ -459,7 +473,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 				// 	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 				// }
 
-				fmt.Println("ACK: ", ack)
+				// fmt.Println("ACK: ", ack)
 				if ack.Status == string(constants.UpdateStateDownloading) {
 					retry = 0
 
@@ -549,7 +563,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// Unzip the .zip file
-					fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
+					// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
 					cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint) // -o to overwrite if extract already exists
 					_, err := cmd.CombinedOutput()
 					if err != nil {
@@ -564,7 +578,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					updateFileLocation := updateZipFileLocation[:len(updateZipFileLocation)-4]
-					fmt.Println(updateFileLocation)
+					// fmt.Println(updateFileLocation)
 
 					// Check if file has .deb extension
 					if !strings.HasSuffix(strings.ToLower(updateFileLocation), ".deb") {
@@ -710,8 +724,8 @@ func (u *UpdateService) handleAckMessages(client MQTT.Client, msg MQTT.Message) 
 		return
 	}
 
-	fmt.Println(string(msg.Payload()))
-	fmt.Println("ACK DATA: ", payload)
+	// fmt.Println(string(msg.Payload()))
+	// fmt.Println("ACK DATA: ", payload)
 	// Send acknowledgment to channel
 	u.ackChannel <- payload
 }
@@ -754,12 +768,12 @@ func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
 }
 
 // isNewVersion checks if the new version is newer than the current version using semantic versioning
-func (u *UpdateService) isNewVersion(newVersion string) (bool, error) {
-	currentVersionStr, err := u.readCurrentVersion()
-	if err != nil {
-		return false, err
-	}
-	fmt.Println(currentVersionStr)
+func (u *UpdateService) isNewVersion(currentVersionStr, newVersion string) (bool, error) {
+	// currentVersionStr, err := u.readCurrentVersion()
+	// if err != nil {
+	// 	return false, err
+	// }
+	// fmt.Println(currentVersionStr)
 
 	// Parse the current and new version strings into semver.Version
 	currentVersion, err := semver.NewVersion(currentVersionStr)
@@ -777,11 +791,11 @@ func (u *UpdateService) isNewVersion(newVersion string) (bool, error) {
 }
 
 // readCurrentVersion reads the current version from configs/version.txt
-func (u *UpdateService) readCurrentVersion() (string, error) {
-	versionFile := filepath.Join("configs", "version.txt")
-	data, err := u.FileClient.ReadFile(versionFile)
-	if err != nil {
-		return "", err
-	}
-	return data, nil
-}
+// func (u *UpdateService) readCurrentVersion() (string, error) {
+// 	versionFile := filepath.Join("configs", "version.txt")
+// 	data, err := u.FileClient.ReadFile(versionFile)
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	return data, nil
+// }
