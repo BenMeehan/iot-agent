@@ -49,13 +49,14 @@ type PartitionMetadata struct {
 }
 
 type UpdatesMetaData struct {
-	TimeStamp time.Time `json:"time_stamp,omitempty"`
-	UpdateId  string    `json:"update_id"`
-	FileName  string    `json:"file_name"`
-	FileUrl   string    `json:"update_file_url,omitempty"`
-	Version   string    `json:"version"`
-	Status    string    `json:"status,omitempty"`
-	ErrorLog  string    `json:"error_log,omitempty"`
+	TimeStamp      time.Time `json:"time_stamp,omitempty"`
+	UpdateId       string    `json:"update_id"`
+	FileName       string    `json:"file_name"`
+	FileUrl        string    `json:"update_file_url,omitempty"`
+	Version        string    `json:"version"`
+	SHA256Checksum string    `json:"checksum"`
+	Status         string    `json:"status,omitempty"`
+	ErrorLog       string    `json:"error_log,omitempty"`
 }
 
 type StatusUpdatePayload struct {

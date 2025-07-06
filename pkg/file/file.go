@@ -1,8 +1,11 @@
 package file
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -19,6 +22,7 @@ type FileOperations interface {
 	WriteFileRaw(filePath string, data []byte) error
 	WriteJsonFile(filePath string, data any) error
 	WriteYamlFile(filePath string, data any) error
+	GetFileMultipartFormData(filePath string) (*multipart.FileHeader, error)
 }
 
 // FileService implements the FileOperations interface using standard file operations.
@@ -134,4 +138,52 @@ func (fs *FileService) WriteYamlFile(filePath string, data any) error {
 	}
 
 	return os.Rename(tempFile, filePath) // Atomic file update
+}
+
+// GetFileMultipartFormData returns multipart.FileHeader of given file path
+func (fs *FileService) GetFileMultipartFormData(filePath string) (*multipart.FileHeader, error) {
+	// Open the local file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	// Create a buffer to store the multipart form data
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	// Create a form file field
+	part, err := writer.CreateFormFile("file", filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error createing form file: %v", err)
+	}
+
+	// Copy the file content to the form field
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, fmt.Errorf("error copying file content: %v", err)
+	}
+
+	// Close the writer to finalize the form
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("error closing writer: %v", err)
+	}
+
+	// Create a reader for the multipart form data
+	reader := bytes.NewReader(body.Bytes())
+
+	// Parse the multipart form
+	multipartReader, err := multipart.NewReader(reader, writer.Boundary()).ReadForm(10 << 20) // 10MB max memory
+	if err != nil {
+		return nil, fmt.Errorf("error parsing multipart form: %v", err)
+	}
+
+	// Get the file header from the parsed form
+	fileHeaders, ok := multipartReader.File["file"]
+	if !ok || len(fileHeaders) == 0 {
+		return nil, fmt.Errorf("no file found in form")
+	}
+
+	return fileHeaders[0], nil
+
 }

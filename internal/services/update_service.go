@@ -2,9 +2,11 @@ package services
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -375,13 +377,14 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 
 	// Create the update metadata
 	u.updateMetadata = models.UpdatesMetaData{
-		TimeStamp: time.Now().UTC(),
-		UpdateId:  payload.ID,
-		FileUrl:   payload.FileUrl,
-		FileName:  payload.FileName,
-		Version:   payload.UpdateVersion,
-		Status:    string(u.state),
-		ErrorLog:  "",
+		TimeStamp:      time.Now().UTC(),
+		UpdateId:       payload.ID,
+		FileUrl:        payload.FileUrl,
+		FileName:       payload.FileName,
+		Version:        payload.UpdateVersion,
+		SHA256Checksum: payload.SHA256Checksum,
+		Status:         string(u.state),
+		ErrorLog:       "",
 	}
 
 	// Old version
@@ -492,6 +495,23 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 						u.Logger.Error().Err(err).Msg("Failed to download file")
 						return
+					}
+
+					// Check checksum
+					file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/" + u.updateMetadata.FileName)
+					fileContents, _ := file.Open()
+					sha256Hasher := sha256.New()
+					if _, err := io.Copy(sha256Hasher, fileContents); err != nil {
+						fmt.Println("CHECKSUM ERROR...")
+						return
+					}
+
+					checksumValue := fmt.Sprintf("%x", sha256Hasher.Sum(nil))
+					fmt.Println(checksumValue, ":::", u.updateMetadata.SHA256Checksum)
+					if checksumValue == u.updateMetadata.SHA256Checksum {
+						fmt.Println("CHECKSUM MATCH...")
+					} else {
+						fmt.Println("CHECKSUM MISMATCH...")
 					}
 
 					// Update state to installing and send mqtt request
