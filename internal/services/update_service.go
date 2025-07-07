@@ -38,6 +38,7 @@ type UpdateService struct {
 
 	state            constants.UpdateState
 	validTransitions map[constants.UpdateState][]constants.UpdateState
+	activePartition  models.Partition
 	dataPartition    models.Partition
 	ackChannel       chan models.Ack
 	wg               sync.WaitGroup
@@ -65,7 +66,8 @@ func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, 
 			constants.UpdateStateIdle:        {constants.UpdateStateDownloading, constants.UpdateStateFailure},
 			constants.UpdateStateDownloading: {constants.UpdateStateInstalling, constants.UpdateStateFailure},
 			// constants.UpdateStateVerifying:   {constants.UpdateStateInstalling, constants.UpdateStateFailure},
-			constants.UpdateStateInstalling: {constants.UpdateStateSuccess, constants.UpdateStateFailure},
+			constants.UpdateStateInstalling: {constants.UpdateStateVerifying, constants.UpdateStateFailure},
+			constants.UpdateStateVerifying:  {constants.UpdateStateSuccess, constants.UpdateStateFailure},
 			constants.UpdateStateSuccess:    {constants.UpdateStateIdle},
 			constants.UpdateStateFailure:    {constants.UpdateStateIdle},
 		},
@@ -140,6 +142,47 @@ func (u *UpdateService) Start() error {
 				u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
 			}
 
+		} else if prevState == string(constants.UpdateStateVerifying) {
+			// verify if update is installed
+			if u.activePartition.PARTUUID == u.metadataContent.ActivePartition.PARTUUID {
+				u.SubscribeMQTTEndpoint()
+				u.UpdateProcssFlow()
+
+				u.setState(constants.UpdateStateSuccess)
+
+				// Send success acknowledgment data to ack channel
+				mqttPayload := &models.StatusUpdatePayload{
+					UpdateId: u.metadataContent.Update.UpdateId,
+					DeviceId: u.DeviceInfo.GetDeviceID(),
+					Status:   string(u.state),
+				}
+				mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+				if err != nil {
+					u.setState(constants.UpdateStateFailure)
+					// updateMetadata.Status = string(u.state)
+					// updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal mqtt download payload: %v", err)
+					// u.metadataContent.Update = updateMetadata
+					u.metadataContent.Update.ErrorLog = fmt.Sprintf("%v", err)
+					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+					return err
+				}
+
+				sharedAckTopic := "agent-updates"
+
+				token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+				token.Wait()
+				if token.Error() != nil {
+					u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
+					return token.Error()
+				} else {
+					u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+				}
+
+			} else {
+				// update failed, partition cannot be used
+			}
 		} else if prevState == string(constants.UpdateStateSuccess) {
 			u.SubscribeMQTTEndpoint()
 		}
@@ -247,7 +290,8 @@ func (u *UpdateService) verifySystemPartition() error {
 		}
 	}
 
-	// Set the data partition to the receiver struct
+	// Set the active, data partition to the receiver struct
+	u.activePartition = activePartition
 	u.dataPartition = dataPartition
 
 	// Print partition information in the requested format
@@ -626,15 +670,15 @@ func (u *UpdateService) UpdateProcssFlow() {
 						return
 					}
 
-					// Update state to success and send mqtt request
-					if err := u.setState(constants.UpdateStateSuccess); err != nil {
+					// Update state to verifying and send mqtt request
+					if err := u.setState(constants.UpdateStateVerifying); err != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = "Error updating state from installing to success"
+						u.updateMetadata.ErrorLog = "Error updating state from installing to verifying"
 						u.metadataContent.Update = u.updateMetadata
 						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-						u.Logger.Error().Err(err).Msg("Error updating state from installing to success")
+						u.Logger.Error().Err(err).Msg("Error updating state from installing to verifying")
 						return
 					}
 
@@ -663,16 +707,37 @@ func (u *UpdateService) UpdateProcssFlow() {
 					if token.Error() != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = "Failed to publish for success message"
+						u.updateMetadata.ErrorLog = "Failed to publish for verifying message"
 						u.metadataContent.Update = u.updateMetadata
 						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-						u.Logger.Error().Err(token.Error()).Msg("Failed to publish for success message")
+						u.Logger.Error().Err(token.Error()).Msg("Failed to publish for verifying message")
 						return
 					} else {
 						u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
 					}
 
+				} else if ack.Status == string(constants.UpdateStateVerifying) {
+					fmt.Println("VERIFYING...")
+
+					// update verifying in metadata
+					u.updateMetadata.Status = string(u.state)
+					u.metadataContent.Update = u.updateMetadata
+					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					// device reboot
+					cmd := exec.Command("shutdown", "-r", "now")
+					_, err := cmd.CombinedOutput()
+					if err != nil {
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to reboot device: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Failed to reboot device: %v", err))
+						return
+					}
 				} else if ack.Status == string(constants.UpdateStateSuccess) {
 					retry = 0
 
