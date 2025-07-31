@@ -33,6 +33,7 @@ type UpdateCommandPayload struct {
 	FileUrl        string `json:"update_file_url,omitempty"`
 	UpdateStatus   string `json:"update_status,omitempty"`
 	SHA256Checksum string `json:"checksum,omitempty"`
+	ManifestData   string `json:"manifest,omitempty"`
 }
 
 type Partition struct {
@@ -57,6 +58,7 @@ type UpdatesMetaData struct {
 	SHA256Checksum string    `json:"checksum"`
 	Status         string    `json:"status,omitempty"`
 	ErrorLog       string    `json:"error_log,omitempty"`
+	ManifestData   string    `json:"manifest"`
 }
 
 type StatusUpdatePayload struct {
@@ -69,4 +71,25 @@ type Ack struct {
 	UpdateId string `json:"update_id"`
 	Status   string `json:"status"`
 	Error    string `json:"error"`
+}
+
+type Manifest struct {
+	OSUpdate string `json:"os_update"`
+	Updates  Update `json:"updates"`
+}
+
+type Update struct {
+	FileUpdates   []FileUpdate   `json:"file_update"`
+	FolderUpdates []FolderUpdate `json:"folder_update"`
+}
+
+type FileUpdate struct {
+	Path   string `json:"path"`
+	Update string `json:"update"`
+}
+
+type FolderUpdate struct {
+	Path      string `json:"path"`
+	Update    string `json:"update"`
+	Overwrite bool   `json:"overwrite"`
 }

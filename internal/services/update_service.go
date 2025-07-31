@@ -327,8 +327,21 @@ func (u *UpdateService) verifySystemPartition() error {
 		fmt.Println("Data Partition: Not found")
 	}
 
+	// Create /data/updates and /data/mnt/inactive
+	err = os.MkdirAll(u.dataPartition.MountPoint+"/updates", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
+	if err != nil {
+		return fmt.Errorf("Error creating directory: %v\n", err)
+	}
+	fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/update")
+
+	err = os.MkdirAll(u.dataPartition.MountPoint+"/mnt/inactive", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
+	if err != nil {
+		return fmt.Errorf("Error creating directory: %v\n", err)
+	}
+	fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
+
 	// Storing metadata file in data partition
-	u.metadataFile = dataPartition.MountPoint + "/updates-metadata.json"
+	u.metadataFile = dataPartition.MountPoint + "/updates/updates-metadata.json"
 	u.metadataContent = models.PartitionMetadata{
 		TimeStamp:         time.Now().UTC(),
 		ActivePartition:   activePartition,
@@ -429,6 +442,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		SHA256Checksum: payload.SHA256Checksum,
 		Status:         string(u.state),
 		ErrorLog:       "",
+		ManifestData:   payload.ManifestData,
 	}
 
 	// Old version
@@ -529,8 +543,23 @@ func (u *UpdateService) UpdateProcssFlow() {
 					u.metadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
+					// Create /data/updates and /data/mnt/inactive
+					err := os.MkdirAll(u.dataPartition.MountPoint+"/updates", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
+					if err != nil {
+						fmt.Printf("Error creating directory: %v\n", err)
+						return
+					}
+					fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/update")
+
+					err = os.MkdirAll(u.dataPartition.MountPoint+"/mnt/inactive", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
+					if err != nil {
+						fmt.Printf("Error creating directory: %v\n", err)
+						return
+					}
+					fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
+
 					// Download file the file and send mqtt message for installing
-					if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/"+u.updateMetadata.FileName); err != nil {
+					if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/updates/"+u.updateMetadata.FileName); err != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
 						u.updateMetadata.ErrorLog = fmt.Sprintf("Error downloading update file: %v", err)
@@ -542,7 +571,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// Check checksum
-					file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/" + u.updateMetadata.FileName)
+					file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
 					fileContents, _ := file.Open()
 					sha256Hasher := sha256.New()
 					if _, err := io.Copy(sha256Hasher, fileContents); err != nil {
@@ -613,62 +642,14 @@ func (u *UpdateService) UpdateProcssFlow() {
 					u.metadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-					// Install the update and send mqtt message for success
-					updateZipFileLocation := u.dataPartition.MountPoint + "/" + u.metadataContent.Update.FileName
-					if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
-						u.metadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+					// if !u.installDebPackage() {
+					// 	return
+					// }
 
-						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Zip file does not exist in device: %v", err))
+					if !u.installUpdates() {
 						return
 					}
-
-					// Unzip the .zip file
-					// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
-					cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint) // -o to overwrite if extract already exists
-					_, err := cmd.CombinedOutput()
-					if err != nil {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
-						u.metadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
-
-						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
-						return
-					}
-
-					updateFileLocation := updateZipFileLocation[:len(updateZipFileLocation)-4]
-					// fmt.Println(updateFileLocation)
-
-					// Check if file has .deb extension
-					if !strings.HasSuffix(strings.ToLower(updateFileLocation), ".deb") {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation)
-						u.metadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
-
-						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation))
-						return
-					}
-
-					// Install .deb update file
-					cmd = exec.Command("dpkg", "-i", updateFileLocation)
-					_, err = cmd.CombinedOutput()
-					if err != nil {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Error installing update: %v", err)
-						u.metadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
-
-						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error installing update: %v", err))
-						return
-					}
+					return
 
 					// Update state to verifying and send mqtt request
 					if err := u.setState(constants.UpdateStateVerifying); err != nil {
@@ -884,3 +865,204 @@ func (u *UpdateService) isNewVersion(currentVersionStr, newVersion string) (bool
 // 	}
 // 	return data, nil
 // }
+
+func (u *UpdateService) installDebPackage() bool {
+	// Install the update and send mqtt message for success
+	updateZipFileLocation := u.dataPartition.MountPoint + "/" + u.metadataContent.Update.FileName
+	if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Zip file does not exist in device: %v", err))
+		return false
+	}
+
+	// Unzip the .zip file
+	// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
+	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint) // -o to overwrite if extract already exists
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
+		return false
+	}
+
+	updateFileLocation := updateZipFileLocation[:len(updateZipFileLocation)-4]
+	// fmt.Println(updateFileLocation)
+
+	// Check if file has .deb extension
+	if !strings.HasSuffix(strings.ToLower(updateFileLocation), ".deb") {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation))
+		return false
+	}
+
+	// Install .deb update file
+	cmd = exec.Command("dpkg", "-i", updateFileLocation)
+	_, err = cmd.CombinedOutput()
+	if err != nil {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Error installing update: %v", err)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error installing update: %v", err))
+		return false
+	}
+
+	return true
+}
+
+// installUpdates will update and send mqtt message for success
+func (u *UpdateService) installUpdates() bool {
+
+	updateZipFileLocation := u.dataPartition.MountPoint + "/updates/" + u.metadataContent.Update.FileName
+	if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Zip file does not exist in device: %v", err))
+		return false
+	}
+
+	// Unzip the .zip file
+	// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
+	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		u.setState(constants.UpdateStateFailure)
+		u.updateMetadata.Status = string(u.state)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		u.metadataContent.Update = u.updateMetadata
+		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
+		return false
+	}
+
+	// Parse the manifest
+	var manifest models.Manifest
+	if err = json.Unmarshal([]byte(u.updateMetadata.ManifestData), &manifest); err != nil {
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error parsing manifest data: %v", err))
+		return false
+	}
+
+	fmt.Println(manifest)
+
+	// OS Update
+	if manifest.OSUpdate != "" {
+		return u.initiateOSUpdate(manifest.OSUpdate)
+	}
+
+	// Folder Update
+	for _, manifestFileUpdate := range manifest.Updates.FolderUpdates {
+		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
+		to_path := manifestFileUpdate.Path
+		fmt.Println(from_path, to_path)
+
+		if manifestFileUpdate.Overwrite {
+			cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", "--delete", from_path, to_path)
+			executeCommandAndWait(cmd)
+		} else {
+			cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
+			executeCommandAndWait(cmd)
+		}
+	}
+
+	// File Update
+	for _, manifestFileUpdate := range manifest.Updates.FileUpdates {
+		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
+		to_path := manifestFileUpdate.Path
+		fmt.Println(from_path, to_path)
+
+		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", u.dataPartition.MountPoint+"/updates/"+manifestFileUpdate.Update, manifestFileUpdate.Path)
+		executeCommandAndWait(cmd)
+	}
+
+	return true
+
+}
+
+// initiateOSUpdate will update system files in device
+func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) bool {
+	// Setup loop device and mount the OS update image
+
+	// cmd := exec.Command("losetup", "-fP", OSUpdateFile)
+
+	// losetup -fP $backup_file
+	// loop_dev=$(losetup -fP --show "$backup_file")
+	// kpartx -av $loop_dev
+
+	// Check if image root size is less than inactive partition size
+
+	// Transfer all system files into inactive partition
+
+	// Unmount and sync the changes
+
+	return true
+}
+
+func executeCommandAndGetOutput(cmd *exec.Cmd) (error, string) {
+	output, err := cmd.CombinedOutput() // Captures both stdout and stderr
+	if err != nil {
+		return fmt.Errorf("error running command: %v\n", err), ""
+	}
+	return nil, fmt.Sprint(string(output))
+}
+
+func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
+	// Create pipes to capture stdout and stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return false, fmt.Errorf("Error setting up stdout pipe: %v\n", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return false, fmt.Errorf("Error setting up stderr pipe: %v\n", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("Error starting command: %v\n", err)
+	}
+
+	// Read and display stdout in real-time
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+	}()
+
+	// Read and display stderr in real-time
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", scanner.Text())
+		}
+	}()
+
+	// Wait for the command to finish
+	if err := cmd.Wait(); err != nil {
+		return false, fmt.Errorf("command failed: %v\n", err)
+	}
+
+	return true, nil
+}
