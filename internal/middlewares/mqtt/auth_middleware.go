@@ -288,9 +288,9 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT(ctx context.Context) error {
 				return ctx.Err()
 			case <-time.After(totalDelay):
 			}
-		}
 
-		attempt++
+			attempt++
+		}
 	}
 
 	m.logger.Info().Msg("No valid refresh token or refresh failed, falling back to certificate")
