@@ -3,7 +3,7 @@ name: CI Pipeline
 on:
   push:
     branches:
-      - '**'
+      - main
     tags:
       - 'v*.*.*'
   pull_request:
@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, "android-latest"]
+        os: [ubuntu-latest]
       fail-fast: false
     steps:
     - name: Checkout code
