@@ -23,7 +23,7 @@ type HeartbeatService struct {
 
 	// Dependencies
 	deviceInfo     identity.DeviceInfoInterface
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	logger         zerolog.Logger
 
 	// Internal state management
@@ -34,7 +34,7 @@ type HeartbeatService struct {
 
 // newHeartbeatService initializes a new HeartbeatService.
 func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
-	deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger) *HeartbeatService {
+	deviceInfo identity.DeviceInfoInterface, mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger) *HeartbeatService {
 
 	return &HeartbeatService{
 		pubTopic:       pubTopic,
@@ -49,7 +49,7 @@ func NewHeartbeatService(pubTopic string, interval time.Duration, qos int,
 // Start launches the heartbeat loop in a separate goroutine.
 func (h *HeartbeatService) Start() error {
 	if h.ctx != nil {
-		h.logger.Warn().Msg("HeartbeatService is already running")
+		h.logger.Warn().Msg("Heartbeat service is already running")
 		return errors.New("heartbeat service is already running")
 	}
 
@@ -61,14 +61,14 @@ func (h *HeartbeatService) Start() error {
 		h.runHeartbeatLoop()
 	}()
 
-	h.logger.Info().Str("topic", h.pubTopic).Msg("HeartbeatService started successfully")
+	h.logger.Info().Str("topic", h.pubTopic).Msg("Heartbeat service started successfully")
 	return nil
 }
 
 // Stop gracefully stops the heartbeat service.
 func (h *HeartbeatService) Stop() error {
 	if h.ctx == nil {
-		h.logger.Warn().Msg("HeartbeatService is not running")
+		h.logger.Warn().Msg("Heartbeat service is not running")
 		return errors.New("heartbeat service is not running")
 	}
 
@@ -78,7 +78,7 @@ func (h *HeartbeatService) Stop() error {
 	h.ctx = nil
 	h.cancel = nil
 
-	h.logger.Info().Msg("HeartbeatService stopped successfully")
+	h.logger.Info().Msg("Heartbeat service stopped successfully")
 	return nil
 }
 

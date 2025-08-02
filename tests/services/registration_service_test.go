@@ -17,7 +17,7 @@ import (
 func TestRegistrationService_Start_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -34,7 +34,10 @@ func TestRegistrationService_Start_Success(t *testing.T) {
 		handler := args.Get(2).(mqtt.MessageHandler)
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			handler(nil, mocks.NewMockMessage(mock.Anything, []byte(`{"device_id": "new-device-id"}`)))
+			mockMessage := new(mocks.Message)
+			mockMessage.On("Payload").Return([]byte(`{"device_id": "new-device-id"}`))
+			handler(nil, mockMessage)
+			mockMessage.AssertExpectations(t)
 		}()
 	}).Return(nil)
 
@@ -75,7 +78,7 @@ func TestRegistrationService_Start_Success(t *testing.T) {
 func TestRegistrationService_Run_WithExistingDeviceID(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -91,7 +94,10 @@ func TestRegistrationService_Run_WithExistingDeviceID(t *testing.T) {
 		handler := args.Get(2).(mqtt.MessageHandler)
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			handler(nil, mocks.NewMockMessage(mock.Anything, []byte(`{"device_id": "existing-device-id"}`)))
+			mockMessage := new(mocks.Message)
+			mockMessage.On("Payload").Return([]byte(`{"device_id": "existing-device-id"}`))
+			handler(nil, mockMessage)
+			mockMessage.AssertExpectations(t)
 		}()
 	}).Return(nil)
 
@@ -124,7 +130,7 @@ func TestRegistrationService_Run_WithExistingDeviceID(t *testing.T) {
 func TestRegistrationService_Run_WithoutDeviceID(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -141,7 +147,10 @@ func TestRegistrationService_Run_WithoutDeviceID(t *testing.T) {
 		handler := args.Get(2).(mqtt.MessageHandler)
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			handler(nil, mocks.NewMockMessage(mock.Anything, []byte(`{"device_id": "new-device-id"}`)))
+			mockMessage := new(mocks.Message)
+			mockMessage.On("Payload").Return([]byte(`{"device_id": "new-device-id"}`))
+			handler(nil, mockMessage)
+			mockMessage.AssertExpectations(t)
 		}()
 	}).Return(nil)
 
@@ -174,7 +183,7 @@ func TestRegistrationService_Run_WithoutDeviceID(t *testing.T) {
 func TestRegistrationService_Register_Timeout(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -230,7 +239,7 @@ func TestRegistrationService_Register_Timeout(t *testing.T) {
 func TestRegistrationService_Stop_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -246,7 +255,10 @@ func TestRegistrationService_Stop_Success(t *testing.T) {
 		handler := args.Get(2).(mqtt.MessageHandler)
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			handler(nil, mocks.NewMockMessage(mock.Anything, []byte(`{"device_id": "existing-device-id"}`)))
+			mockMessage := new(mocks.Message)
+			mockMessage.On("Payload").Return([]byte(`{"device_id": "existing-device-id"}`))
+			handler(nil, mockMessage)
+			mockMessage.AssertExpectations(t)
 		}()
 	}).Return(nil)
 
@@ -283,7 +295,7 @@ func TestRegistrationService_Stop_Success(t *testing.T) {
 func TestRegistrationService_Stop_NotRunning(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 

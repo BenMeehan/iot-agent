@@ -18,7 +18,7 @@ import (
 func TestCommandService_Start_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -47,7 +47,7 @@ func TestCommandService_Start_Success(t *testing.T) {
 func TestCommandService_Start_Failure(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -77,7 +77,7 @@ func TestCommandService_Start_Failure(t *testing.T) {
 func TestCommandService_Stop_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -111,7 +111,7 @@ func TestCommandService_Stop_Success(t *testing.T) {
 func TestCommandService_Stop_Failure(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -146,7 +146,7 @@ func TestCommandService_Stop_Failure(t *testing.T) {
 func TestCommandService_HandleCommand_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -168,7 +168,9 @@ func TestCommandService_HandleCommand_Success(t *testing.T) {
 		Command: "echo hello",
 	}
 	payload, _ := json.Marshal(cmdRequest)
-	msg := mocks.NewMockMessage("test-topic/test-device-id", payload)
+	msg := new(mocks.Message)
+	msg.On("Topic").Return("test-topic/test-device-id")
+	msg.On("Payload").Return(payload)
 
 	// Execute
 	cs.HandleCommand(nil, msg)
@@ -176,13 +178,14 @@ func TestCommandService_HandleCommand_Success(t *testing.T) {
 	// Assert
 	mockDeviceInfo.AssertExpectations(t)
 	mockMQTTMiddleware.AssertExpectations(t)
+	msg.AssertExpectations(t)
 }
 
 // TestCommandService_HandleCommand_InvalidPayload tests handling of an invalid command payload.
 func TestCommandService_HandleCommand_InvalidPayload(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	cs := services.NewCommandService(
@@ -196,7 +199,8 @@ func TestCommandService_HandleCommand_InvalidPayload(t *testing.T) {
 	)
 
 	// Simulate an invalid MQTT message
-	msg := mocks.NewMockMessage("test-topic/test-device-id", []byte("invalid-json"))
+	msg := new(mocks.Message)
+	msg.On("Payload").Return([]byte("invalid-json"))
 
 	// Execute
 	cs.HandleCommand(nil, msg)
@@ -204,13 +208,14 @@ func TestCommandService_HandleCommand_InvalidPayload(t *testing.T) {
 	// Assert
 	mockDeviceInfo.AssertExpectations(t)
 	mockMQTTMiddleware.AssertExpectations(t)
+	msg.AssertExpectations(t)
 }
 
 // TestCommandService_ExecuteCommand_Success tests the successful execution of a command.
 func TestCommandService_ExecuteCommand_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	cs := services.NewCommandService(
@@ -235,7 +240,7 @@ func TestCommandService_ExecuteCommand_Success(t *testing.T) {
 func TestCommandService_ExecuteCommand_Timeout(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	cs := services.NewCommandService(
@@ -261,7 +266,7 @@ func TestCommandService_ExecuteCommand_Timeout(t *testing.T) {
 func TestCommandService_publishOutput_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockMQTTMiddleware.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
@@ -294,7 +299,7 @@ func TestCommandService_publishOutput_Success(t *testing.T) {
 func TestCommandService_publishOutput_Failure(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockMQTTMiddleware.On("Publish", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("publish failed"))

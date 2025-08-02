@@ -35,7 +35,7 @@ type SSHService struct {
 
 	// Dependencies
 	deviceInfo     identity.DeviceInfoInterface
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	fileClient     file.FileOperations
 	logger         zerolog.Logger
 
@@ -53,7 +53,7 @@ type SSHService struct {
 
 // NewSSHService initializes a new SSHService instance.
 func NewSSHService(subTopic string, qos int, sshUser, privateKeyPath, serverPublicKeyPath string, deviceInfo identity.DeviceInfoInterface,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, logger zerolog.Logger, maxSSHConnections int,
+	mqttMiddleware mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger, maxSSHConnections int,
 	connectionTimeout time.Duration) *SSHService {
 
 	ctx, cancel := context.WithCancel(context.Background())

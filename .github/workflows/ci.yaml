@@ -3,38 +3,130 @@ name: CI Pipeline
 on:
   push:
     branches:
-      - '**'
+      - main
+    tags:
+      - 'v*.*.*'
   pull_request:
     branches:
       - main
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+      fail-fast: false
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 
 
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.23'
+        go-version: '1.24.5'
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Install dependencies
       run: make deps
+      env:
+        GIN_MODE: test
 
     - name: Run linting
       run: make lint
+      env:
+        GIN_MODE: test
 
-    - name: Run tests
-      run: make test
+    - name: Run tests with coverage
+      run: make test-coverage
+      env:
+        GIN_MODE: test
+    
+    - name: Generate coverage HTML
+      run: make coverage-html
+      env:
+        GIN_MODE: test
+
+    - name: Upload coverage report
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage.out
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false 
+    
+    - name: Upload coverage HTML
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html
+        path: coverage.html
+        retention-days: 7
+
+    - name: Run vulnerability scan
+      run: |
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        govulncheck ./...
+      env:
+        GIN_MODE: test
 
     - name: Build project
       run: make build
+      env:
+        GIN_MODE: test
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: agent
-        path: bin/agent
+        name: agent-${{ matrix.os }}
+        path: |
+          bin/agent
+          configs/config.yaml
+          configs/device.json
+          configs/metrics.json
+          certs/*.crt
+        retention-days: 7
+
+  release:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: agent-ubuntu-latest
+        path: artifacts/
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/bin/agent
+          artifacts/configs/config.yaml
+          artifacts/configs/device.json
+          artifacts/configs/metrics.json
+          artifacts/certs/*.crt
+        draft: false
+        prerelease: false
+        name: Release ${{ github.ref_name }}
+        body: |
+          Release ${{ github.ref_name }} of the IoT Agent.
+          Built artifact: bin/agent
+          Configuration files: configs/config.yaml, configs/device.json, configs/metrics.json
+          Certificates: certs/*.crt
+        token: ${{ secrets.GITHUB_TOKEN }}

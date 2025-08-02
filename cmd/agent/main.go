@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/service_registry"
 	"github.com/benmeehan/iot-agent/internal/utils"
 	"github.com/benmeehan/iot-agent/pkg/encryption"
@@ -101,20 +100,19 @@ func main() {
 	}
 	log.Info().Msg("JWT manager initialized successfully")
 
-	// Initialize middlewares
-	mqttAuthMiddleware := mqtt_middleware.NewMQTTAuthenticationMiddleware(config.Middlewares.Authentication.Topic,
-		config.Middlewares.Authentication.QOS, config.MQTT.ClientID, deviceInfo, mqttClient, jwtManager, fileClient,
-		log.Logger, config.Middlewares.Authentication.RetryDelay, config.Middlewares.Authentication.RequestWaitingTime)
+	// Create service registry
+	serviceRegistry := service_registry.NewServiceRegistry(mqttClient, fileClient, encryptionManager, jwtManager, log.Logger)
+	log.Info().Msg("Service registry initialized successfully")
 
-	err = mqttAuthMiddleware.Init(config.Middlewares.Authentication.AuthenticationCert)
+	// Initialize middleware chain
+	mqttMiddlewareChain, err := serviceRegistry.InitializeMiddlewares(config, deviceInfo)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize MQTT authentication middleware")
+		log.Fatal().Err(err).Msg("Failed to initialize MQTT middleware chain")
 	}
-	log.Info().Msg("MQTT authentication middleware initialized successfully")
+	log.Info().Msg("MQTT middleware chain initialized successfully")
 
 	// Create and register services
-	serviceRegistry := service_registry.NewServiceRegistry(mqttAuthMiddleware, fileClient, encryptionManager, jwtManager, log.Logger)
-	if err := serviceRegistry.RegisterServices(config, deviceInfo); err != nil {
+	if err := serviceRegistry.RegisterServices(config, mqttMiddlewareChain, deviceInfo); err != nil {
 		log.Fatal().Err(err).Msg("Failed to register services")
 	}
 	log.Info().Msg("Services registered successfully")

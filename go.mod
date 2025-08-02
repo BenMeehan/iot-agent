@@ -1,6 +1,8 @@
 module github.com/benmeehan/iot-agent
 
-go 1.22
+go 1.23.0
+
+toolchain go1.24.5
 
 require (
 	github.com/Masterminds/semver/v3 v3.3.1
@@ -11,7 +13,7 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/stretchr/testify v1.8.4
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
-	golang.org/x/crypto v0.25.0
+	golang.org/x/crypto v0.35.0
 	googlemaps.github.io/maps v1.7.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -28,8 +30,8 @@ require (
 	github.com/tklauser/numcpus v0.8.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opencensus.io v0.22.3 // indirect
-	golang.org/x/net v0.27.0 // indirect
+	golang.org/x/net v0.36.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.22.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/time v0.0.0-20200416051211-89c76fbcd5d1 // indirect
 )

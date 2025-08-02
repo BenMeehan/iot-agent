@@ -10,6 +10,11 @@ deps:
 	$(GO) mod tidy
 	@echo "[SUCCESS] Dependencies installed."
 
+vendor:
+	@echo "[INFO] Creating/updating vendor directory...]"
+	$(GO) mod vendor
+	@echo "[SUCCESS] Vendor directory updated.]"
+
 lint:
 	@echo "[INFO] Running linter..."
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
@@ -20,6 +25,18 @@ test:
 	@echo "[INFO] Running tests..."
 	$(GO) test $(PKG) -v
 	@echo "[SUCCESS] Tests completed."
+
+test-coverage:
+	@echo "[INFO] Running tests with coverage across all packages..."
+	$(GO) test ./... -coverprofile=coverage.out -covermode=atomic -v
+	@echo "[INFO] Coverage summary:"
+	@$(GO) tool cover -func=coverage.out | awk '/total:/ {print}'
+	@echo "[SUCCESS] Coverage report generated at coverage.out"
+
+coverage-html:
+	@echo "[INFO] Rendering coverage HTML..."
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "[SUCCESS] Open coverage.html in a browser to view detailed coverage."
 
 build:
 	@echo "[INFO] Building the project..."

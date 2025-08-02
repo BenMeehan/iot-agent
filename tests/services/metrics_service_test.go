@@ -16,7 +16,7 @@ import (
 func TestMetricsService_Start_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -61,7 +61,7 @@ func TestMetricsService_Start_Success(t *testing.T) {
 func TestMetricsService_Stop_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -106,7 +106,7 @@ func TestMetricsService_Stop_Success(t *testing.T) {
 func TestMetricsService_LoadAndValidateMetricsConfig_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -148,7 +148,7 @@ func TestMetricsService_LoadAndValidateMetricsConfig_Success(t *testing.T) {
 func TestMetricsService_LoadAndValidateMetricsConfig_InvalidConfig(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -186,7 +186,7 @@ func TestMetricsService_LoadAndValidateMetricsConfig_InvalidConfig(t *testing.T)
 func TestMetricsService_CollectMetrics_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -231,7 +231,7 @@ func TestMetricsService_CollectMetrics_Success(t *testing.T) {
 func TestMetricsService_PublishMetrics_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	mockFileClient := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 

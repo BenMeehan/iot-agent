@@ -92,6 +92,7 @@ type Config struct {
 
 	Middlewares struct {
 		Authentication struct {
+			Enabled            bool          `yaml:"enabled"`              // Enable/disable authentication middleware
 			Topic              string        `yaml:"topic"`                // MQTT topic for authentication middleware
 			QOS                int           `yaml:"qos"`                  // MQTT QoS level for authentication messages
 			RetryDelay         time.Duration `yaml:"retry_delay"`          // Delay between retries (in seconds)
