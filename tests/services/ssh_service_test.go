@@ -47,7 +47,7 @@ const hostKey = `ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCqbf0aQRhTVAEByNFBODw3DjF
 func TestSSHService_Start_Success(t *testing.T) {
 	// Setup mocks
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTT := new(mocks.MQTTAuthMiddleware)
+	mockMQTT := new(mocks.MQTTMiddleware)
 	mockFile := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -86,7 +86,7 @@ func TestSSHService_Start_Success(t *testing.T) {
 func TestSSHService_Start_PrivateKeyError(t *testing.T) {
 	// Setup mocks
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTT := new(mocks.MQTTAuthMiddleware)
+	mockMQTT := new(mocks.MQTTMiddleware)
 	mockFile := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -121,7 +121,7 @@ func TestSSHService_Start_PrivateKeyError(t *testing.T) {
 func TestSSHService_Start_PublicKeyError(t *testing.T) {
 	// Setup mocks
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTT := new(mocks.MQTTAuthMiddleware)
+	mockMQTT := new(mocks.MQTTMiddleware)
 	mockFile := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -157,7 +157,7 @@ func TestSSHService_Start_PublicKeyError(t *testing.T) {
 func TestSSHService_Start_SubscribeError(t *testing.T) {
 	// Setup mocks
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTT := new(mocks.MQTTAuthMiddleware)
+	mockMQTT := new(mocks.MQTTMiddleware)
 	mockFile := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 
@@ -197,7 +197,7 @@ func TestSSHService_Start_SubscribeError(t *testing.T) {
 func TestSSHService_Stop_Success(t *testing.T) {
 	// Setup mocks
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTT := new(mocks.MQTTAuthMiddleware)
+	mockMQTT := new(mocks.MQTTMiddleware)
 	mockFile := new(mocks.FileOperations)
 	logger := zerolog.Nop()
 

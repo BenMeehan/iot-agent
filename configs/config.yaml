@@ -13,6 +13,7 @@ security:
 
 middlewares:
   authentication:
+    enabled: true                    
     topic: "iot-authentication"
     qos: 2
     retry_delay: 60s
@@ -32,7 +33,7 @@ services:
     topic: "iot-heartbeat"
     interval: 10s
     qos: 1
-    enabled: false
+    enabled: true
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"

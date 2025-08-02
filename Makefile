@@ -10,6 +10,11 @@ deps:
 	$(GO) mod tidy
 	@echo "[SUCCESS] Dependencies installed."
 
+vendor:
+	@echo "[INFO] Creating/updating vendor directory...]"
+	$(GO) mod vendor
+	@echo "[SUCCESS] Vendor directory updated.]"
+
 lint:
 	@echo "[INFO] Running linter..."
 	$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest

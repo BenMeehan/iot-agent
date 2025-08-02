@@ -30,7 +30,7 @@ type UpdateService struct {
 	SubTopic         string
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
-	mqttMiddleware   mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware   mqtt_middleware.MQTTMiddleware
 	FileClient       file.FileOperations
 	Logger           zerolog.Logger
 	StateFile        string
@@ -41,7 +41,7 @@ type UpdateService struct {
 
 // NewUpdateService creates and returns a new instance of UpdateService.
 func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
+	mqttMiddleware mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
 	stateFile string, updateFilePath string) *UpdateService {
 
 	return &UpdateService{
@@ -111,7 +111,7 @@ func (u *UpdateService) Stop() error {
 		return err
 	}
 
-	u.Logger.Info().Msg("UpdateService stopped successfully")
+	u.Logger.Info().Msg("Update service stopped successfully")
 	return nil
 }
 

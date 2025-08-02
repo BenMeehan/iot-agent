@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/benmeehan/iot-agent/internal/constants"
 	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/services"
 	"github.com/benmeehan/iot-agent/internal/utils"
@@ -12,65 +13,68 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/benmeehan/iot-agent/pkg/jwt"
 	"github.com/benmeehan/iot-agent/pkg/location"
+	"github.com/benmeehan/iot-agent/pkg/mqtt"
 	"github.com/rs/zerolog"
 )
 
 // ServiceRegistry manages the lifecycle of various services in the system.
 type ServiceRegistry struct {
-	services           map[string]Service // Stores registered services
-	serviceKeys        []string           // Maintains order of service registration
-	mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware
-	fileClient         file.FileOperations
-	encryptionManager  encryption.EncryptionManagerInterface
-	jwtManager         jwt.JWTManagerInterface
-	Logger             zerolog.Logger
+	services          map[string]Service
+	serviceKeys       []string
+	mqttClient        mqtt.MQTTClient
+	fileClient        file.FileOperations
+	encryptionManager encryption.EncryptionManagerInterface
+	jwtManager        jwt.JWTManagerInterface
+	logger            zerolog.Logger
 }
 
 // NewServiceRegistry initializes a new service registry with dependencies.
-func NewServiceRegistry(mqttAuthMiddleware mqtt_middleware.MQTTAuthMiddleware, fileClient file.FileOperations, encryptionManager encryption.EncryptionManagerInterface,
-	jwtManager jwt.JWTManagerInterface, logger zerolog.Logger) *ServiceRegistry {
+func NewServiceRegistry(
+	mqttClient mqtt.MQTTClient,
+	fileClient file.FileOperations,
+	encryptionManager encryption.EncryptionManagerInterface,
+	jwtManager jwt.JWTManagerInterface,
+	logger zerolog.Logger,
+) *ServiceRegistry {
 	return &ServiceRegistry{
-		services:           make(map[string]Service),
-		mqttAuthMiddleware: mqttAuthMiddleware,
-		fileClient:         fileClient,
-		encryptionManager:  encryptionManager,
-		jwtManager:         jwtManager,
-		Logger:             logger,
+		services:          make(map[string]Service),
+		mqttClient:        mqttClient,
+		fileClient:        fileClient,
+		encryptionManager: encryptionManager,
+		jwtManager:        jwtManager,
+		logger:            logger,
 	}
 }
 
 // RegisterService adds a new service to the registry.
 func (sr *ServiceRegistry) RegisterService(name string, svc Service) {
 	if _, exists := sr.services[name]; exists {
-		sr.Logger.Warn().Msgf("Service %s is already registered", name)
+		sr.logger.Warn().Msgf("Service %s is already registered", name)
 		return
 	}
 	sr.services[name] = svc
 	sr.serviceKeys = append(sr.serviceKeys, name)
-	sr.Logger.Info().Msgf("Registered service: %s", name)
+	sr.logger.Info().Msgf("Registered service: %s", name)
 }
 
 // StartServices initiates all registered services in order.
-// If a service fails to start, it stops already started services.
 func (sr *ServiceRegistry) StartServices() error {
 	startedServices := []string{}
-
 	for _, name := range sr.serviceKeys {
 		svc := sr.services[name]
-		sr.Logger.Info().Msgf("Starting service: %s", name)
+		sr.logger.Info().Msgf("Starting service: %s", name)
 		if err := svc.Start(); err != nil {
-			sr.Logger.Error().Err(err).Msgf("Failed to start service: %s", name)
-
-			// Stop already started services before returning
-			sr.Logger.Warn().Msg("Stopping already started services due to startup failure...")
+			sr.logger.Error().Err(err).Msgf("Failed to start service: %s", name)
+			sr.logger.Warn().Msg("Stopping already started services due to startup failure...")
 			for i := len(startedServices) - 1; i >= 0; i-- {
-				_ = sr.services[startedServices[i]].Stop()
+				if stopErr := sr.services[startedServices[i]].Stop(); stopErr != nil {
+					sr.logger.Error().Err(stopErr).Msgf("Failed to stop service: %s", startedServices[i])
+				}
 			}
-			return err
+			return fmt.Errorf("failed to start service %s: %w", name, err)
 		}
 		startedServices = append(startedServices, name)
 	}
-
 	return nil
 }
 
@@ -85,15 +89,15 @@ func (sr *ServiceRegistry) StopServices() error {
 	}
 	if len(stopErrors) > 0 {
 		for _, e := range stopErrors {
-			sr.Logger.Error().Err(e).Msg("Service stop failure")
+			sr.logger.Error().Err(e).Msg("Service stop failure")
 		}
 		return errors.Join(stopErrors...)
 	}
 	return nil
 }
 
-// RegisterServices initializes and registers enabled services based on configuration.
-func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo identity.DeviceInfoInterface) error {
+// RegisterServices initializes and registers enabled services using the provided chained MQTT client.
+func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddlewareChain mqtt_middleware.MQTTMiddleware, deviceInfo identity.DeviceInfoInterface) error {
 	// Ordered service definitions with inline constructors
 	servicesInOrder := []struct {
 		name        string
@@ -101,7 +105,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 		constructor func() (Service, error)
 	}{
 		{
-			name:    "registration",
+			name:    constants.REGISTRATION_SERVICE,
 			enabled: config.Services.Registration.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewRegistrationService(
@@ -113,14 +117,14 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Registration.MaxBackoff,
 					config.Services.Registration.ResponseTimeout,
 					deviceInfo,
-					sr.mqttAuthMiddleware,
+					mqttMiddlewareChain,
 					sr.fileClient,
-					sr.Logger,
+					sr.logger,
 				), nil
 			},
 		},
 		{
-			name:    "heartbeat",
+			name:    constants.HEARTBEAT_SERVICE,
 			enabled: config.Services.Heartbeat.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewHeartbeatService(
@@ -128,13 +132,13 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Heartbeat.Interval,
 					config.Services.Heartbeat.QOS,
 					deviceInfo,
-					sr.mqttAuthMiddleware,
-					sr.Logger,
+					mqttMiddlewareChain,
+					sr.logger,
 				), nil
 			},
 		},
 		{
-			name:    "metrics",
+			name:    constants.METRICS_SERVICE,
 			enabled: config.Services.Metrics.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewMetricsService(
@@ -144,14 +148,14 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Metrics.Timeout,
 					deviceInfo,
 					config.Services.Metrics.QOS,
-					sr.mqttAuthMiddleware,
+					mqttMiddlewareChain,
 					sr.fileClient,
-					sr.Logger,
+					sr.logger,
 				), nil
 			},
 		},
 		{
-			name:    "command",
+			name:    constants.COMMAND_SERVICE,
 			enabled: config.Services.Command.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewCommandService(
@@ -159,14 +163,14 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Command.QOS,
 					config.Services.Command.OutputSizeLimit,
 					config.Services.Command.MaxExecutionTime,
-					sr.mqttAuthMiddleware,
+					mqttMiddlewareChain,
 					deviceInfo,
-					sr.Logger,
+					sr.logger,
 				), nil
 			},
 		},
 		{
-			name:    "ssh",
+			name:    constants.SSH_SERVICE,
 			enabled: config.Services.SSH.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewSSHService(
@@ -176,16 +180,16 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.SSH.PrivateKeyPath,
 					config.Services.SSH.ServerPublicKeyPath,
 					deviceInfo,
-					sr.mqttAuthMiddleware,
+					mqttMiddlewareChain,
 					sr.fileClient,
-					sr.Logger,
+					sr.logger,
 					config.Services.SSH.MaxSSHConnections,
 					config.Services.SSH.ConnectionTimeout,
 				), nil
 			},
 		},
 		{
-			name:    "location",
+			name:    constants.LOCATION_SERVICE,
 			enabled: config.Services.Location.Enabled,
 			constructor: func() (Service, error) {
 				var provider location.Provider
@@ -193,7 +197,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 				if config.Services.Location.SensorBased {
 					provider, err = location.NewGoogleGeolocationProvider(config.Services.Location.MapsAPIKey)
 					if err != nil {
-						sr.Logger.Error().Err(err).Msg("failed to create Google Geolocation provider")
+						sr.logger.Error().Err(err).Msg("failed to create Google Geolocation provider")
 						return nil, err
 					}
 				} else {
@@ -204,23 +208,23 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 					config.Services.Location.Interval,
 					config.Services.Location.QOS,
 					deviceInfo,
-					sr.mqttAuthMiddleware,
-					sr.Logger,
+					mqttMiddlewareChain,
+					sr.logger,
 					provider,
 				), nil
 			},
 		},
 		{
-			name:    "update",
+			name:    constants.UPDATE_SERVICE,
 			enabled: config.Services.Update.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewUpdateService(
 					config.Services.Update.Topic,
 					deviceInfo,
 					config.Services.Update.QOS,
-					sr.mqttAuthMiddleware,
+					mqttMiddlewareChain,
 					sr.fileClient,
-					sr.Logger,
+					sr.logger,
 					config.Services.Update.StateFile,
 					config.Services.Update.UpdateFilePath,
 				), nil
@@ -234,14 +238,14 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 		if svc.enabled {
 			serviceInstance, err := svc.constructor()
 			if err != nil {
-				sr.Logger.Error().Err(err).Msgf("Failed to create %s service", svc.name)
-				return err
+				sr.logger.Error().Err(err).Msgf("Failed to create %s service", svc.name)
+				return fmt.Errorf("failed to create %s service: %w", svc.name, err)
 			}
 			sr.RegisterService(svc.name, serviceInstance)
 			registeredServices = append(registeredServices, svc.name)
 		}
 	}
 
-	sr.Logger.Info().Msgf("Registered services in order: %v", registeredServices)
+	sr.logger.Info().Msgf("Registered services in order: %v", registeredServices)
 	return nil
 }

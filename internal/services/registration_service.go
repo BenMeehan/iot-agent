@@ -31,7 +31,7 @@ type RegistrationService struct {
 
 	// Dependencies for handling device information, MQTT, file operations, and encryption
 	deviceInfo     identity.DeviceInfoInterface
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	fileClient     file.FileOperations
 	logger         zerolog.Logger
 
@@ -51,7 +51,7 @@ func NewRegistrationService(
 	maxDelay time.Duration,
 	responseTimeout time.Duration,
 	deviceInfo identity.DeviceInfoInterface,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
+	mqttMiddleware mqtt_middleware.MQTTMiddleware,
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
 ) *RegistrationService {
@@ -76,7 +76,7 @@ func (rs *RegistrationService) Start() error {
 	defer rs.mu.Unlock()
 
 	if rs.ctx != nil {
-		rs.logger.Warn().Msg("RegistrationService is already running")
+		rs.logger.Warn().Msg("Registration service is already running")
 		return errors.New("registration service is already running")
 	}
 
@@ -193,7 +193,7 @@ func (rs *RegistrationService) Register(payload models.RegistrationPayload) erro
 		case <-time.After(delay):
 			continue
 		case <-rs.ctx.Done():
-			rs.logger.Warn().Msg("RegistrationService stopping during retry delay")
+			rs.logger.Warn().Msg("Registration Service stopping during retry delay")
 			return errors.New("registration service stopped")
 		}
 	}
@@ -227,6 +227,6 @@ func (rs *RegistrationService) Stop() error {
 	rs.ctx = nil
 	rs.cancel = nil
 
-	rs.logger.Info().Msg("RegistrationService stopped successfully")
+	rs.logger.Info().Msg("Registration service stopped successfully")
 	return nil
 }

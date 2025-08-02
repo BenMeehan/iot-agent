@@ -1,6 +1,7 @@
-package mqtt_middleware
+package mqtt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
-
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
@@ -19,39 +19,26 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// MQTTAuthMiddleware defines a generic MQTT middleware contract.
-type MQTTAuthMiddleware interface {
-	Init(authenticationCertificatePath string) error
-	Publish(topic string, qos byte, retained bool, payload interface{}) error
-	Subscribe(topic string, qos byte, callback mqttLib.MessageHandler) error
-	Unsubscribe(topics ...string) error
-}
-
-// MQTTAuthenticationMiddleware handles authentication for MQTT operations.
+// MQTTAuthenticationMiddleware handles JWT-based authentication for MQTT operations.
 type MQTTAuthenticationMiddleware struct {
-	// Configuration
-	authTopic                 string // MQTT topic for authentication requests
-	qos                       int    // Quality of Service level for MQTT messages
-	authenticationCertificate []byte // Certificate used for initial authentication
-	clientID                  string // Unique identifier for the MQTT client
-
-	// Dependencies
-	deviceInfo identity.DeviceInfoInterface // Interface for retrieving device information
-	mqttClient mqtt.MQTTClient              // MQTT client instance
-	jwtManager jwt.JWTManagerInterface      // Manages JWT tokens
-	fileClient file.FileOperations          // Handles file operations
-	logger     zerolog.Logger               // Logger for tracking events and errors
-
-	// Retry settings
-	retryDelay         time.Duration // Base delay between retry attempts
-	requestWaitingTime time.Duration // Timeout duration for waiting on JWT responses
-
-	// Synchronization
-	jwtMutex      sync.Mutex // Protects JWT refresh operations from concurrent access
-	refreshingJWT bool       // Tracks if a JWT refresh is currently in progress
+	next                      MQTTMiddleware
+	authTopic                 string
+	qos                       int
+	authenticationCertificate []byte
+	clientID                  string
+	deviceInfo                identity.DeviceInfoInterface
+	mqttClient                mqtt.MQTTClient
+	jwtManager                jwt.JWTManagerInterface
+	fileClient                file.FileOperations
+	logger                    zerolog.Logger
+	retryDelay                time.Duration
+	requestWaitingTime        time.Duration
+	jwtMutex                  sync.Mutex
+	refreshingJWT             bool
+	jwtRefreshDone            chan struct{}
 }
 
-// NewMQTTAuthenticationMiddleware initializes and returns a new instance of MQTTAuthenticationMiddleware.
+// NewMQTTAuthenticationMiddleware creates a new authentication middleware instance.
 func NewMQTTAuthenticationMiddleware(
 	authTopic string,
 	qos int,
@@ -68,41 +55,49 @@ func NewMQTTAuthenticationMiddleware(
 		authTopic:          authTopic,
 		qos:                qos,
 		clientID:           clientID,
-		retryDelay:         time.Duration(retryDelay) * time.Second,
-		requestWaitingTime: time.Duration(requestWaitingTime) * time.Second,
 		deviceInfo:         deviceInfo,
 		mqttClient:         mqttClient,
 		jwtManager:         jwtManager,
 		fileClient:         fileClient,
 		logger:             logger,
-		refreshingJWT:      false,
+		retryDelay:         retryDelay * time.Second,
+		requestWaitingTime: requestWaitingTime * time.Second,
+		jwtRefreshDone:     make(chan struct{}, 1),
 	}
 }
 
-// Init sets up the middleware by loading tokens and ensuring a valid JWT.
-func (m *MQTTAuthenticationMiddleware) Init(authenticationCertificatePath string) error {
-	// Attempt to load existing JWT tokens
+// SetNext sets the next middleware in the chain.
+func (m *MQTTAuthenticationMiddleware) SetNext(next MQTTMiddleware) {
+	m.next = next
+}
+
+// Init initializes the middleware by loading tokens and ensuring a valid JWT.
+func (m *MQTTAuthenticationMiddleware) Init(params interface{}) error {
+	authenticationCertPath, ok := params.(string)
+	if !ok {
+		return fmt.Errorf("Init: expected string, got %T", params)
+	}
+
 	if err := m.jwtManager.LoadTokens(); err != nil {
 		m.logger.Error().Err(err).Msg("Failed to load existing JWT tokens")
 	}
 
-	// Read the authentication certificate from the specified path
-	certificate, err := m.fileClient.ReadFileRaw(authenticationCertificatePath)
+	certificate, err := m.fileClient.ReadFileRaw(authenticationCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to load authentication certificate: %w", err)
 	}
 	m.authenticationCertificate = certificate
 
-	// Validate the current JWT
 	isValid, err := m.jwtManager.IsJWTValid()
 	if err != nil {
 		return fmt.Errorf("failed to validate JWT: %w", err)
 	}
 
-	// If no valid JWT exists, request one using the certificate
 	if !isValid {
 		m.logger.Info().Msg("No valid JWT found or JWT invalid, requesting initial authentication")
-		if err := m.requestJWTWithCertificate(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), m.requestWaitingTime)
+		defer cancel()
+		if err := m.requestJWTWithCertificate(ctx); err != nil {
 			return fmt.Errorf("initial JWT request failed: %w", err)
 		}
 	}
@@ -113,14 +108,12 @@ func (m *MQTTAuthenticationMiddleware) Init(authenticationCertificatePath string
 func (m *MQTTAuthenticationMiddleware) onAuthMessage(msg mqttLib.Message) error {
 	m.logger.Info().Str("topic", msg.Topic()).Msg("Received authentication response")
 
-	// Parse the authentication response
 	var authResponse models.AuthResponse
 	if err := json.Unmarshal(msg.Payload(), &authResponse); err != nil {
 		m.logger.Error().Err(err).Msg("Failed to parse authentication response")
 		return err
 	}
 
-	// Save the received tokens
 	if err := m.jwtManager.SaveTokens(authResponse.AccessToken, authResponse.RefreshToken, authResponse.ExpiresIn); err != nil {
 		m.logger.Error().Err(err).Msg("Failed to save tokens")
 		return err
@@ -130,17 +123,17 @@ func (m *MQTTAuthenticationMiddleware) onAuthMessage(msg mqttLib.Message) error 
 }
 
 // waitForJWTResponse waits for a JWT response with a timeout and unsubscribes afterward.
-func (m *MQTTAuthenticationMiddleware) waitForJWTResponse(jwtChan chan error, responseTopic string) error {
+func (m *MQTTAuthenticationMiddleware) waitForJWTResponse(ctx context.Context, jwtChan chan error, responseTopic string) error {
 	defer func() {
-		// Clean up by unsubscribing from the response topic
 		if err := m.Unsubscribe(responseTopic); err != nil {
 			m.logger.Warn().Err(err).Msgf("Failed to unsubscribe from topic: %s", responseTopic)
 		}
 	}()
 
-	// Wait for response or timeout
 	select {
-	case <-time.After(60 * time.Second):
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(m.requestWaitingTime):
 		return errors.New("authentication response timeout")
 	case err := <-jwtChan:
 		if err != nil {
@@ -150,32 +143,29 @@ func (m *MQTTAuthenticationMiddleware) waitForJWTResponse(jwtChan chan error, re
 	}
 }
 
-// requestJWTWithCertificate requests a JWT using the authentication certificate with infinite retries.
-func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
-	attempt := 0
+// requestJWTWithCertificate requests a JWT using the authentication certificate.
+func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate(ctx context.Context) error {
+	var attempt int
 	for {
-		attempt++
 		m.logger.Info().Int("attempt", attempt).Msg("Attempting to request JWT with certificate")
 
 		err := func() error {
-			// Prepare the authentication request payload
 			payload := models.AuthRequest{}
 			var identifier string
-			if identifier = m.deviceInfo.GetDeviceID(); identifier != "" {
-				payload.DeviceID = identifier
+			if id := m.deviceInfo.GetDeviceID(); id != "" {
+				payload.DeviceID = id
+				identifier = id
 			} else {
 				payload.ClientID = m.clientID
 				identifier = m.clientID
 			}
 			payload.Key = m.authenticationCertificate
 
-			// Serialize the payload
 			payloadBytes, err := json.Marshal(payload)
 			if err != nil {
-				return errors.New("failed to marshal authentication request")
+				return fmt.Errorf("failed to marshal authentication request: %w", err)
 			}
 
-			// Set up response handling
 			jwtChan := make(chan error, 1)
 			handler := func(client mqttLib.Client, msg mqttLib.Message) {
 				jwtChan <- m.onAuthMessage(msg)
@@ -185,7 +175,6 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 				return fmt.Errorf("failed to subscribe for auth response: %w", err)
 			}
 
-			// Publish the authentication request
 			m.logger.Info().Str("topic", m.authTopic).Msg("Publishing authentication request with certificate")
 			token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
 			token.Wait()
@@ -193,8 +182,7 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 				return fmt.Errorf("failed to publish authentication request: %w", token.Error())
 			}
 
-			// Wait for the response
-			return m.waitForJWTResponse(jwtChan, authResponseTopic)
+			return m.waitForJWTResponse(ctx, jwtChan, authResponseTopic)
 		}()
 
 		if err == nil {
@@ -202,49 +190,58 @@ func (m *MQTTAuthenticationMiddleware) requestJWTWithCertificate() error {
 			return nil
 		}
 
-		// Apply jitter to retry delay to prevent thundering herd problem
 		jitter := time.Duration(rand.Int63n(int64(m.retryDelay) / 10))
-		totalDelay := m.retryDelay + jitter
-
+		totalDelay := m.retryDelay*time.Duration(attempt) + jitter
 		m.logger.Warn().
 			Int("attempt", attempt).
 			Dur("retry_delay_ms", totalDelay).
 			Err(err).
 			Msg("Failed to obtain JWT, retrying after delay")
-		time.Sleep(totalDelay)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(totalDelay):
+		}
+
+		attempt++
 	}
 }
 
-// refreshJWT requests a new JWT token using either refresh token or certificate with infinite retries.
-func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
-	// Prevent concurrent JWT refreshes
+// refreshJWT requests a new JWT using a refresh token or certificate.
+func (m *MQTTAuthenticationMiddleware) refreshJWT(ctx context.Context) error {
 	m.jwtMutex.Lock()
 	if m.refreshingJWT {
 		m.jwtMutex.Unlock()
-		return errors.New("JWT refresh already in progress, try again later")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-m.jwtRefreshDone:
+			return nil
+		}
 	}
 	m.refreshingJWT = true
 	m.jwtMutex.Unlock()
 
-	// Reset the refresh flag when done
 	defer func() {
 		m.jwtMutex.Lock()
 		m.refreshingJWT = false
+		select {
+		case m.jwtRefreshDone <- struct{}{}:
+		default:
+		}
 		m.jwtMutex.Unlock()
 	}()
 
-	// Check if refresh token is still valid
 	refreshToken, expiresIn := m.jwtManager.GetRefreshToken()
 	isValid := time.Now().Before(time.Now().Add(time.Duration(expiresIn) * time.Second))
 
 	if isValid {
-		attempt := 0
+		var attempt int
 		for {
-			attempt++
 			m.logger.Info().Int("attempt", attempt).Msg("Attempting to refresh JWT with refresh token")
 
 			err := func() error {
-				// Prepare refresh request payload
 				authRequestPayload := models.AuthRequest{
 					DeviceID:     m.deviceInfo.GetDeviceID(),
 					RefreshToken: refreshToken,
@@ -254,7 +251,6 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 					return fmt.Errorf("failed to serialize refresh request: %w", err)
 				}
 
-				// Set up response handling
 				jwtChan := make(chan error, 1)
 				handler := func(client mqttLib.Client, msg mqttLib.Message) {
 					jwtChan <- m.onAuthMessage(msg)
@@ -264,7 +260,6 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 					return fmt.Errorf("failed to subscribe for refresh response: %w", err)
 				}
 
-				// Publish the refresh request
 				m.logger.Info().Str("topic", m.authTopic).Msg("Publishing token refresh request")
 				token := m.mqttClient.Publish(m.authTopic, byte(m.qos), false, payloadBytes)
 				token.Wait()
@@ -272,8 +267,7 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 					return fmt.Errorf("failed to publish refresh request: %w", token.Error())
 				}
 
-				// Wait for the response
-				return m.waitForJWTResponse(jwtChan, authResponseTopic)
+				return m.waitForJWTResponse(ctx, jwtChan, authResponseTopic)
 			}()
 
 			if err == nil {
@@ -281,34 +275,40 @@ func (m *MQTTAuthenticationMiddleware) refreshJWT() error {
 				return nil
 			}
 
+			jitter := time.Duration(rand.Int63n(int64(m.retryDelay) / 10))
+			totalDelay := m.retryDelay*time.Duration(attempt) + jitter
 			m.logger.Warn().
 				Int("attempt", attempt).
-				Dur("retry_delay_ms", m.retryDelay).
+				Dur("retry_delay_ms", totalDelay).
 				Err(err).
 				Msg("Failed to refresh JWT with refresh token, retrying after delay")
-			time.Sleep(m.retryDelay)
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(totalDelay):
+			}
 		}
+
+		attempt++
 	}
 
-	// Fallback to certificate if refresh token is invalid
 	m.logger.Info().Msg("No valid refresh token or refresh failed, falling back to certificate")
-	return m.requestJWTWithCertificate()
+	return m.requestJWTWithCertificate(ctx)
 }
 
-// validateJWT ensures a valid JWT is available before performing actions.
-func (m *MQTTAuthenticationMiddleware) validateJWT() (string, error) {
+// validateJWT ensures a valid JWT is available.
+func (m *MQTTAuthenticationMiddleware) validateJWT(ctx context.Context) (string, error) {
 	token := m.jwtManager.GetJWT()
 
-	// Check if the current JWT is still valid
 	isJWTValid, err := m.jwtManager.CheckExpiration(token, constants.AccessToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to validate JWT: %w", err)
 	}
 
-	// Refresh JWT if it’s expired
 	if !isJWTValid {
 		m.logger.Info().Msg("JWT is expired, attempting refresh")
-		if err := m.refreshJWT(); err != nil {
+		if err := m.refreshJWT(ctx); err != nil {
 			return "", fmt.Errorf("failed to refresh JWT: %w", err)
 		}
 		token = m.jwtManager.GetJWT()
@@ -318,15 +318,16 @@ func (m *MQTTAuthenticationMiddleware) validateJWT() (string, error) {
 	return token, nil
 }
 
-// Publish wraps any payload with a JWT and sends it via MQTT.
+// Publish wraps the payload with a JWT and sends it via MQTT.
 func (m *MQTTAuthenticationMiddleware) Publish(topic string, qos byte, retained bool, payload interface{}) error {
-	// Validate and retrieve a valid JWT
-	jwtToken, err := m.validateJWT()
+	ctx, cancel := context.WithTimeout(context.Background(), m.requestWaitingTime)
+	defer cancel()
+
+	jwtToken, err := m.validateJWT(ctx)
 	if err != nil {
 		return fmt.Errorf("failed JWT validation: %w", err)
 	}
 
-	// Wrap the payload with the JWT
 	wrappedPayload := models.WrappedPayload{
 		JWT:     jwtToken,
 		Payload: payload,
@@ -337,8 +338,11 @@ func (m *MQTTAuthenticationMiddleware) Publish(topic string, qos byte, retained 
 		return fmt.Errorf("failed to serialize wrapped payload: %w", err)
 	}
 
-	// Publish the message
 	m.logger.Debug().Str("topic", topic).Msg("Publishing message with JWT")
+	if m.next != nil {
+		return m.next.Publish(topic, qos, retained, payloadBytes)
+	}
+
 	token := m.mqttClient.Publish(topic, qos, retained, payloadBytes)
 	token.Wait()
 	if token.Error() != nil {
@@ -350,9 +354,13 @@ func (m *MQTTAuthenticationMiddleware) Publish(topic string, qos byte, retained 
 	return nil
 }
 
-// Subscribe subscribes to a topic with the provided callback function.
+// Subscribe subscribes to a topic with the provided callback.
 func (m *MQTTAuthenticationMiddleware) Subscribe(topic string, qos byte, callback mqttLib.MessageHandler) error {
-	// Subscribe to the specified topic
+	m.logger.Debug().Str("topic", topic).Msg("Subscribing to topic")
+	if m.next != nil {
+		return m.next.Subscribe(topic, qos, callback)
+	}
+
 	token := m.mqttClient.Subscribe(topic, qos, callback)
 	token.Wait()
 	if token.Error() != nil {
@@ -366,7 +374,11 @@ func (m *MQTTAuthenticationMiddleware) Subscribe(topic string, qos byte, callbac
 
 // Unsubscribe unsubscribes from the specified topics.
 func (m *MQTTAuthenticationMiddleware) Unsubscribe(topics ...string) error {
-	// Unsubscribe from the specified topics
+	m.logger.Debug().Strs("topics", topics).Msg("Unsubscribing from topics")
+	if m.next != nil {
+		return m.next.Unsubscribe(topics...)
+	}
+
 	token := m.mqttClient.Unsubscribe(topics...)
 	token.Wait()
 	if token.Error() != nil {

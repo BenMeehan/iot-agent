@@ -16,7 +16,7 @@ import (
 func TestHeartbeatService_Start_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -50,7 +50,7 @@ func TestHeartbeatService_Start_Success(t *testing.T) {
 func TestHeartbeatService_Stop_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -84,7 +84,7 @@ func TestHeartbeatService_Stop_Success(t *testing.T) {
 func TestHeartbeatService_runHeartbeatLoop_Success(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")
@@ -121,7 +121,7 @@ func TestHeartbeatService_runHeartbeatLoop_Success(t *testing.T) {
 func TestHeartbeatService_runHeartbeatLoop_PublishError(t *testing.T) {
 	// Setup
 	mockDeviceInfo := new(mocks.DeviceInfoInterface)
-	mockMQTTMiddleware := new(mocks.MQTTAuthMiddleware)
+	mockMQTTMiddleware := new(mocks.MQTTMiddleware)
 	logger := zerolog.Nop()
 
 	mockDeviceInfo.On("GetDeviceID").Return("test-device-id")

@@ -27,7 +27,7 @@ type CommandService struct {
 	maxExecutionTime time.Duration
 
 	// Dependencies
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	deviceInfo     identity.DeviceInfoInterface
 	logger         zerolog.Logger
 
@@ -45,7 +45,7 @@ type CommandService struct {
 func NewCommandService(
 	subTopic string,
 	qos, outputSizeLimit, maxExecutionTime int,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
+	mqttMiddleware mqtt_middleware.MQTTMiddleware,
 	deviceInfo identity.DeviceInfoInterface,
 	logger zerolog.Logger,
 ) *CommandService {
@@ -100,7 +100,7 @@ func (cs *CommandService) Stop() error {
 		return err
 	}
 
-	cs.logger.Info().Msg("CommandService stopped successfully")
+	cs.logger.Info().Msg("Command service stopped successfully")
 	return nil
 }
 

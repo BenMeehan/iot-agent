@@ -18,7 +18,7 @@ type LocationService struct {
 	Interval         time.Duration
 	DeviceInfo       identity.DeviceInfoInterface
 	QOS              int
-	mqttMiddleware   mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware   mqtt_middleware.MQTTMiddleware
 	Logger           zerolog.Logger
 	LocationProvider location.Provider
 	stopChan         chan struct{}
@@ -27,7 +27,7 @@ type LocationService struct {
 
 // NewLocationService creates and returns a new instance of LocationService.
 func NewLocationService(pubTopic string, interval time.Duration, qos int, deviceInfo identity.DeviceInfoInterface,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
+	mqttMiddleware mqtt_middleware.MQTTMiddleware, logger zerolog.Logger, locationProvider location.Provider) *LocationService {
 
 	return &LocationService{
 		PubTopic:         pubTopic,
@@ -45,7 +45,7 @@ func NewLocationService(pubTopic string, interval time.Duration, qos int, device
 // Start initiates the location service and continuously publishes location messages to the MQTT broker.
 func (l *LocationService) Start() error {
 	if l.running {
-		l.Logger.Warn().Msg("LocationService is already running")
+		l.Logger.Warn().Msg("Location service is already running")
 		return errors.New("location service is already running")
 	}
 
@@ -63,32 +63,32 @@ func (l *LocationService) Start() error {
 					l.Logger.Error().Err(err).Msg("Failed to publish current location")
 				}
 			case <-l.stopChan:
-				l.Logger.Info().Msg("Stopping LocationService")
+				l.Logger.Info().Msg("Stopping Location service")
 				l.running = false
 				return
 			}
 		}
 	}()
 
-	l.Logger.Info().Str("topic", l.PubTopic).Msg("LocationService started")
+	l.Logger.Info().Str("topic", l.PubTopic).Msg("Location service started")
 	return nil
 }
 
 // Stop gracefully stops the location service.
 func (l *LocationService) Stop() error {
 	if !l.running {
-		l.Logger.Warn().Msg("LocationService is not running")
+		l.Logger.Warn().Msg("Location service is not running")
 		return errors.New("location service is not running")
 	}
 
 	if l.stopChan == nil {
-		l.Logger.Error().Msg("Failed to stop LocationService: stop channel is nil")
+		l.Logger.Error().Msg("Failed to stop Location service: stop channel is nil")
 		return errors.New("stop channel is nil")
 	}
 
 	close(l.stopChan)
 	l.running = false
-	l.Logger.Info().Msg("LocationService stopped")
+	l.Logger.Info().Msg("Location service stopped")
 	return nil
 }
 

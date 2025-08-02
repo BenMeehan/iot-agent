@@ -28,7 +28,7 @@ type MetricsService struct {
 	qos               int
 
 	// Dependencies
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware
+	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	fileClient     file.FileOperations
 	deviceInfo     identity.DeviceInfoInterface
 	logger         zerolog.Logger
@@ -49,7 +49,7 @@ func NewMetricsService(
 	interval, timeout time.Duration,
 	deviceInfo identity.DeviceInfoInterface,
 	qos int,
-	mqttMiddleware mqtt_middleware.MQTTAuthMiddleware,
+	mqttMiddleware mqtt_middleware.MQTTMiddleware,
 	fileClient file.FileOperations,
 	logger zerolog.Logger,
 ) *MetricsService {
@@ -106,11 +106,11 @@ func (m *MetricsService) registerDefaultCollectors() {
 // Start begins periodic metrics collection and publishing.
 func (m *MetricsService) Start() error {
 	if m.ctx != nil {
-		m.logger.Warn().Msg("MetricsService is already running")
+		m.logger.Warn().Msg("Metrics service is already running")
 		return errors.New("metrics service is already running")
 	}
 
-	m.logger.Info().Msg("Starting MetricsService...")
+	m.logger.Info().Msg("Starting Metrics service...")
 
 	// Load and validate metrics configuration
 	config, err := m.LoadAndValidateMetricsConfig()
@@ -136,18 +136,18 @@ func (m *MetricsService) Start() error {
 	m.wg.Add(1)
 	go m.RunMetricsCollectionLoop()
 
-	m.logger.Info().Str("topic", m.pubTopic).Msg("MetricsService started successfully")
+	m.logger.Info().Str("topic", m.pubTopic).Msg("Metrics service started successfully")
 	return nil
 }
 
 // Stop gracefully shuts down the MetricsService.
 func (m *MetricsService) Stop() error {
 	if m.ctx == nil {
-		m.logger.Warn().Msg("MetricsService is not running")
+		m.logger.Warn().Msg("Metrics service is not running")
 		return errors.New("metrics service is not running")
 	}
 
-	m.logger.Info().Msg("Stopping MetricsService...")
+	m.logger.Info().Msg("Stopping Metrics service...")
 	m.cancel()
 	m.wg.Wait()
 
@@ -159,7 +159,7 @@ func (m *MetricsService) Stop() error {
 	m.ctx = nil
 	m.cancel = nil
 
-	m.logger.Info().Msg("MetricsService stopped successfully")
+	m.logger.Info().Msg("Metrics service stopped successfully")
 	return nil
 }
 
