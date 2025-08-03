@@ -2,14 +2,13 @@ package services
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -438,6 +437,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		UpdateId:       payload.ID,
 		FileUrl:        payload.FileUrl,
 		FileName:       payload.FileName,
+		FileSize:       payload.FileSize,
 		Version:        payload.UpdateVersion,
 		SHA256Checksum: payload.SHA256Checksum,
 		Status:         string(u.state),
@@ -558,6 +558,45 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 					fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
 
+					// Check if the space on dataPartition > fileSize
+					cmdStr := fmt.Sprintf("df -m %s | awk 'NR==2 {print $4}'", u.dataPartition.MountPoint)
+					cmd := exec.Command("sh", "-c", cmdStr)
+
+					err, output := executeCommandAndGetOutput(cmd)
+					if err != nil {
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("error getting free space: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg(fmt.Sprintf("error getting free space: %v", err))
+						return
+					}
+
+					updateLocationSpace, err := strconv.ParseFloat(strings.TrimSpace(output), 2)
+					if err != nil {
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Invalid bytes number: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg(fmt.Sprintf("Invalid bytes number: %v", err))
+						return
+					}
+					fileSizeInt, err := strconv.ParseFloat(u.metadataContent.Update.FileSize, 2)
+					if updateLocationSpace < fileSizeInt {
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("insufficient space: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg(fmt.Sprintf("insufficient space: %v", err))
+						return
+					}
+
 					// Download file the file and send mqtt message for installing
 					if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/updates/"+u.updateMetadata.FileName); err != nil {
 						u.setState(constants.UpdateStateFailure)
@@ -571,20 +610,38 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// Check checksum
-					file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
-					fileContents, _ := file.Open()
-					sha256Hasher := sha256.New()
-					if _, err := io.Copy(sha256Hasher, fileContents); err != nil {
-						fmt.Println("CHECKSUM ERROR...")
+					// file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
+					// fileContents, _ := file.Open()
+					// sha256Hasher := sha256.New()
+					// if _, err := io.Copy(sha256Hasher, fileContents); err != nil {
+					// 	fmt.Println("CHECKSUM ERROR...")
+					// 	return
+					// }
+
+					checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
+					fmt.Println(checksumValue, ":::", u.updateMetadata.SHA256Checksum)
+					if err != nil {
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Error validating checksum: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
 						return
 					}
-
-					checksumValue := fmt.Sprintf("%x", sha256Hasher.Sum(nil))
-					fmt.Println(checksumValue, ":::", u.updateMetadata.SHA256Checksum)
 					if checksumValue == u.updateMetadata.SHA256Checksum {
 						fmt.Println("CHECKSUM MATCH...")
 					} else {
 						fmt.Println("CHECKSUM MISMATCH...")
+						u.setState(constants.UpdateStateFailure)
+						u.updateMetadata.Status = string(u.state)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Incorrect checksum: %v", err)
+						u.metadataContent.Update = u.updateMetadata
+						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+						u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
+						return
 					}
 
 					// Update state to installing and send mqtt request
@@ -887,11 +944,12 @@ func (u *UpdateService) installDebPackage() bool {
 	if err != nil {
 		u.setState(constants.UpdateStateFailure)
 		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting the file: %v", err)
 		u.metadataContent.Update = u.updateMetadata
 		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
 		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
+
 		return false
 	}
 
@@ -945,15 +1003,45 @@ func (u *UpdateService) installUpdates() bool {
 	// Unzip the .zip file
 	// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
 	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
-	_, err := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Delete the extracted file
+		u.deleteExtractedFile(updateZipFileLocation)
+
+		u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+
+		// Check if the error is an ExitError
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Get the exit code
+			exitCode := exitErr.ExitCode()
+			fmt.Println(0)
+			if exitCode == 50 {
+				u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+			} else {
+				fmt.Println(2)
+				u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+			}
+		} else {
+			// Handle other types of errors (e.g., command not found)
+			fmt.Println(3)
+			u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+		}
+
 		u.setState(constants.UpdateStateFailure)
 		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
+		// u.updateMetadata.ErrorLog = fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output))
 		u.metadataContent.Update = u.updateMetadata
-		u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
+		fmt.Println(u.metadataFile)
+		fmt.Println(u.metadataContent)
+		err = u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+		if err != nil {
+			fmt.Println("ERROR:")
+			fmt.Println(err)
+			// handle - no space left on device error
+		}
+
+		u.Logger.Error().Err(err).Msg(fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output)))
 		return false
 	}
 
@@ -968,7 +1056,10 @@ func (u *UpdateService) installUpdates() bool {
 
 	// OS Update
 	if manifest.OSUpdate != "" {
-		return u.initiateOSUpdate(manifest.OSUpdate)
+		ok, err := u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + manifest.OSUpdate)
+		if !ok {
+			fmt.Println(err)
+		}
 	}
 
 	// Folder Update
@@ -1001,14 +1092,42 @@ func (u *UpdateService) installUpdates() bool {
 }
 
 // initiateOSUpdate will update system files in device
-func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) bool {
+func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 	// Setup loop device and mount the OS update image
 
-	// cmd := exec.Command("losetup", "-fP", OSUpdateFile)
+	cmd := exec.Command("losetup", "-fP", OSUpdateFile)
+	err, _ := executeCommandAndGetOutput(cmd)
+	if err != nil {
+		return false, err
+	}
+
+	cmd = exec.Command("losetup", "-fP", "--show", OSUpdateFile)
+	err, losetupOutput := executeCommandAndGetOutput(cmd)
+	if err != nil {
+		return false, err
+	}
+	fmt.Println(losetupOutput)
 
 	// losetup -fP $backup_file
 	// loop_dev=$(losetup -fP --show "$backup_file")
 	// kpartx -av $loop_dev
+	// sudo kpartx -av /dev/loop1
+
+	// mkdir -p /data/updates/mnt/backup_{boot,rootfs}
+	// sudo mkdir -p /data/updates/mnt/backup_rootfs
+
+	// mount "${loop_dev_mapped}p1" /data/updates/mnt/backup_boot
+	// mount "${loop_dev_mapped}p2" /data/updates/mnt/backup_rootfs
+	// sudo mount /dev/mapper/loop1p2 /data/updates/mnt/backup_rootfs
+
+	// sudo mount /dev/loop0p2 /data/updates/mnt/backup_rootfs/
+
+	// ionice -c3 rsync -a --info=progress2 --include='/' --exclude='home' --exclude='home/**' --exclude='boot' --exclude='boot/**' /data/updates/mnt/backup_rootfs /b
+
+	// # create symlink for home directory
+	// cd /mnt/sd_rootfs_a/
+	// ln -s data/home home
+	// cd ../../
 
 	// Check if image root size is less than inactive partition size
 
@@ -1016,7 +1135,18 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) bool {
 
 	// Unmount and sync the changes
 
-	return true
+	return true, nil
+}
+
+// deleteExtractedFile will update system files in device
+func (u *UpdateService) deleteExtractedFile(extractedFilePath string) (bool, error) {
+	err := os.Remove(extractedFilePath)
+	if err != nil {
+		fmt.Println("Error deleting file:", err)
+		return false, err
+	}
+
+	return true, nil
 }
 
 func executeCommandAndGetOutput(cmd *exec.Cmd) (error, string) {

@@ -31,6 +31,7 @@ type UpdateCommandPayload struct {
 	UpdateVersion  string `json:"update_version,omitempty"`
 	FileName       string `json:"update_file_name,omitempty"`
 	FileUrl        string `json:"update_file_url,omitempty"`
+	FileSize       string `json:"update_file_size,omitempty"`
 	UpdateStatus   string `json:"update_status,omitempty"`
 	SHA256Checksum string `json:"checksum,omitempty"`
 	ManifestData   string `json:"manifest,omitempty"`
@@ -54,6 +55,7 @@ type UpdatesMetaData struct {
 	UpdateId       string    `json:"update_id"`
 	FileName       string    `json:"file_name"`
 	FileUrl        string    `json:"update_file_url,omitempty"`
+	FileSize       string    `json:"file_size,omitempty"`
 	Version        string    `json:"version"`
 	SHA256Checksum string    `json:"checksum"`
 	Status         string    `json:"status,omitempty"`

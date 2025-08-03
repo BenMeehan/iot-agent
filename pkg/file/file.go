@@ -2,6 +2,7 @@ package file
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ type FileOperations interface {
 	WriteJsonFile(filePath string, data any) error
 	WriteYamlFile(filePath string, data any) error
 	GetFileMultipartFormData(filePath string) (*multipart.FileHeader, error)
+	GetFileHash(filePath string) (string, error)
 }
 
 // FileService implements the FileOperations interface using standard file operations.
@@ -186,4 +188,28 @@ func (fs *FileService) GetFileMultipartFormData(filePath string) (*multipart.Fil
 
 	return fileHeaders[0], nil
 
+}
+
+// GetFileHash returns SHA256 hast of given file path
+func (fs *FileService) GetFileHash(filePath string) (string, error) {
+	// Open the file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	// Create a new SHA-256 hasher
+	hasher := sha256.New()
+
+	// Copy the file contents to the hasher
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", fmt.Errorf("error reading file contents: %v", err)
+	}
+
+	// Compute the hash
+	hash := hasher.Sum(nil)
+
+	// Convert the hash to a hexadecimal string
+	return fmt.Sprintf("%x", hash), nil
 }
