@@ -44,6 +44,7 @@ type UpdateService struct {
 	activePartition   models.Partition
 	inactivePartition models.Partition
 	dataPartition     models.Partition
+	manifest          models.Manifest
 	ackChannel        chan models.Ack
 	wg                sync.WaitGroup
 	metadataFile      string
@@ -710,7 +711,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 					fmt.Println("INSTALLING...")
 
-					// If in-active not found, reboot the device
+					// If in-active partition not found, reboot the device
 					if u.inactivePartition.Device == "" {
 						rebootCmd := exec.Command("reboot")
 						executeCommandAndGetOutput(rebootCmd)
@@ -728,25 +729,33 @@ func (u *UpdateService) UpdateProcssFlow() {
 						fmt.Println("update failed")
 					}
 
-					// update cmdline.txt to in-active partition
-					rebootCmd := exec.Command("reboot")
-					rebootCmdOutput := executeCommmandAndGetStatusCode(rebootCmd)
-					if rebootCmdOutput == -1 || rebootCmdOutput != 0 {
-						fmt.Println("reboot failed")
-					}
-					return
-
-					// Update state to verifying and send mqtt request
+					// Update state to verifying
 					if err := u.setState(constants.UpdateStateVerifying); err != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
 						u.updateMetadata.ErrorLog = "Error updating state from installing to verifying"
 						u.metadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+						e := u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+						fmt.Println("ERROR:")
+						fmt.Println(e)
 
 						u.Logger.Error().Err(err).Msg("Error updating state from installing to verifying")
 						return
 					}
+
+					u.updateMetadata.Status = string(u.state)
+					u.metadataContent.Update = u.updateMetadata
+					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					// Reboot if os update was executed, else send mqtt message to verifying
+					// if u.manifest.OSUpdate != "" {
+					// 	rebootCmd := exec.Command("reboot")
+					// 	rebootCmdOutput := executeCommmandAndGetStatusCode(rebootCmd)
+					// 	if rebootCmdOutput == -1 || rebootCmdOutput != 0 {
+					// 		fmt.Println("reboot failed")
+					// 	}
+					// 	return
+					// }
 
 					mqttPayload := &models.StatusUpdatePayload{
 						UpdateId: u.updateMetadata.UpdateId,
@@ -757,31 +766,77 @@ func (u *UpdateService) UpdateProcssFlow() {
 					if err != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal install mqtt payload: %v", err)
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal mqtt download payload: %v", err)
 						u.metadataContent.Update = u.updateMetadata
 						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-						u.Logger.Error().Err(err).Msg("Failed to marshal install mqtt payload")
+						u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 						return
 					}
-
-					fmt.Println("Sleeping")
-					time.Sleep(20 * time.Second)
 
 					token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
 					token.Wait()
 					if token.Error() != nil {
 						u.setState(constants.UpdateStateFailure)
 						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = "Failed to publish for verifying message"
+						u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to publish mqtt installing message: %v", err)
 						u.metadataContent.Update = u.updateMetadata
 						u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
 
-						u.Logger.Error().Err(token.Error()).Msg("Failed to publish for verifying message")
+						u.Logger.Error().Err(token.Error()).Msg("Failed to publish mqtt installing message")
 						return
 					} else {
-						u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+						u.Logger.Info().Str("status", "installing").Msg("Published to " + sharedAckTopic)
 					}
+
+					// return
+
+					// // Update state to verifying and send mqtt request
+					// if err := u.setState(constants.UpdateStateVerifying); err != nil {
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = "Error updating state from installing to verifying"
+					// 	u.metadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					// 	u.Logger.Error().Err(err).Msg("Error updating state from installing to verifying")
+					// 	return
+					// }
+
+					// mqttPayload := &models.StatusUpdatePayload{
+					// 	UpdateId: u.updateMetadata.UpdateId,
+					// 	DeviceId: u.DeviceInfo.GetDeviceID(),
+					// 	Status:   string(u.state),
+					// }
+					// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+					// if err != nil {
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal install mqtt payload: %v", err)
+					// 	u.metadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					// 	u.Logger.Error().Err(err).Msg("Failed to marshal install mqtt payload")
+					// 	return
+					// }
+
+					// fmt.Println("Sleeping")
+					// time.Sleep(20 * time.Second)
+
+					// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+					// token.Wait()
+					// if token.Error() != nil {
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = "Failed to publish for verifying message"
+					// 	u.metadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+
+					// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for verifying message")
+					// 	return
+					// } else {
+					// 	u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+					// }
 
 				} else if ack.Status == string(constants.UpdateStateVerifying) {
 					fmt.Println("VERIFYING...")
@@ -1074,16 +1129,14 @@ func (u *UpdateService) installUpdates() bool {
 	// }
 
 	// Parse the manifest
-	var manifest models.Manifest
-	if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &manifest); err != nil {
+	//var u.manifest models.Manifest
+	if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
 		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error parsing manifest data: %v", err))
 		return false
 	}
 
-	fmt.Println(manifest)
-
 	// OS Update
-	if manifest.OSUpdate != "" {
+	if u.manifest.OSUpdate != "" {
 		// _, err := u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + manifest.OSUpdate)
 		// if err != nil {
 		// 	fmt.Println(err)
@@ -1096,7 +1149,7 @@ func (u *UpdateService) installUpdates() bool {
 			fmt.Println("error cp")
 		}
 
-		sedArg1 := fmt.Sprintf("\"s/PARTUUID=[0-9a-fA-F-]\\+/PARTUUID=%s/\"", u.inactivePartition.PARTUUID)
+		sedArg1 := fmt.Sprintf("s/PARTUUID=[0-9a-fA-F-]\\+/PARTUUID=%s/", u.inactivePartition.PARTUUID)
 		sedArg2 := fmt.Sprintf("%s/cmdline.txt", u.bootPartition.MountPoint)
 		updateCmdlineCmd := exec.Command("sed", "-i", sedArg1, sedArg2)
 		updateCmdlineCmdOutput := executeCommmandAndGetStatusCode(updateCmdlineCmd)
@@ -1106,7 +1159,7 @@ func (u *UpdateService) installUpdates() bool {
 	}
 
 	// Folder Update
-	for _, manifestFileUpdate := range manifest.Updates.FolderUpdates {
+	for _, manifestFileUpdate := range u.manifest.Updates.FolderUpdates {
 		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
 		to_path := manifestFileUpdate.Path
 		fmt.Println(from_path, to_path)
@@ -1121,7 +1174,7 @@ func (u *UpdateService) installUpdates() bool {
 	}
 
 	// File Update
-	for _, manifestFileUpdate := range manifest.Updates.FileUpdates {
+	for _, manifestFileUpdate := range u.manifest.Updates.FileUpdates {
 		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
 		to_path := manifestFileUpdate.Path
 		fmt.Println(from_path, to_path)
