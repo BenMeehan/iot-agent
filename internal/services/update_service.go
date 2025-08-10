@@ -2,15 +2,18 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -35,15 +38,17 @@ type UpdateService struct {
 	S3         s3.ObjectStorageClient
 	FileClient file.FileOperations
 
-	state            constants.UpdateState
-	validTransitions map[constants.UpdateState][]constants.UpdateState
-	activePartition  models.Partition
-	dataPartition    models.Partition
-	ackChannel       chan models.Ack
-	wg               sync.WaitGroup
-	metadataFile     string
-	metadataContent  models.PartitionMetadata
-	updateMetadata   models.UpdatesMetaData
+	state             constants.UpdateState
+	validTransitions  map[constants.UpdateState][]constants.UpdateState
+	bootPartition     models.Partition
+	activePartition   models.Partition
+	inactivePartition models.Partition
+	dataPartition     models.Partition
+	ackChannel        chan models.Ack
+	wg                sync.WaitGroup
+	metadataFile      string
+	metadataContent   models.PartitionMetadata
+	updateMetadata    models.UpdatesMetaData
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
@@ -275,7 +280,8 @@ func (u *UpdateService) verifySystemPartition() error {
 	}
 
 	// Identify active, inactive, and data partitions
-	var activePartition, inactivePartition, dataPartition models.Partition
+	var bootPartition, activePartition, inactivePartition, dataPartition models.Partition
+	possibleBootPaths := []string{"/boot"}
 	possibleInactivePaths := []string{"/a", "/b"}
 	possibleDataPaths := []string{"/data", "/userdata"}
 
@@ -286,11 +292,15 @@ func (u *UpdateService) verifySystemPartition() error {
 			inactivePartition = mount
 		} else if contains(possibleDataPaths, mount.MountPoint) {
 			dataPartition = mount
+		} else if contains(possibleBootPaths, mount.MountPoint) {
+			bootPartition = mount
 		}
 	}
 
 	// Set the active, data partition to the receiver struct
+	u.bootPartition = bootPartition
 	u.activePartition = activePartition
+	u.inactivePartition = inactivePartition
 	u.dataPartition = dataPartition
 
 	// Print partition information in the requested format
@@ -314,6 +324,10 @@ func (u *UpdateService) verifySystemPartition() error {
 			inactivePartition.Device, inactivePartition.MountPoint, uuid)
 	} else {
 		fmt.Println("Inactive Partition: Not found")
+
+		// // If in-active not found, reboot the device
+		// rebootCmd := exec.Command("reboot")
+		// executeCommandAndGetOutput(rebootCmd)
 	}
 	if dataPartition.Device != "" {
 		uuid := dataPartition.PARTUUID
@@ -695,6 +709,13 @@ func (u *UpdateService) UpdateProcssFlow() {
 					retry = 0
 
 					fmt.Println("INSTALLING...")
+
+					// If in-active not found, reboot the device
+					if u.inactivePartition.Device == "" {
+						rebootCmd := exec.Command("reboot")
+						executeCommandAndGetOutput(rebootCmd)
+					}
+
 					u.updateMetadata.Status = string(u.state)
 					u.metadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
@@ -704,7 +725,14 @@ func (u *UpdateService) UpdateProcssFlow() {
 					// }
 
 					if !u.installUpdates() {
-						return
+						fmt.Println("update failed")
+					}
+
+					// update cmdline.txt to in-active partition
+					rebootCmd := exec.Command("reboot")
+					rebootCmdOutput := executeCommmandAndGetStatusCode(rebootCmd)
+					if rebootCmdOutput == -1 || rebootCmdOutput != 0 {
+						fmt.Println("reboot failed")
 					}
 					return
 
@@ -1002,52 +1030,52 @@ func (u *UpdateService) installUpdates() bool {
 
 	// Unzip the .zip file
 	// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
-	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Delete the extracted file
-		u.deleteExtractedFile(updateZipFileLocation)
+	// cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
+	// output, err := cmd.CombinedOutput()
+	// if err != nil {
+	// 	// Delete the extracted file
+	// 	u.deleteExtractedFile(updateZipFileLocation)
 
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+	// 	u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
 
-		// Check if the error is an ExitError
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Get the exit code
-			exitCode := exitErr.ExitCode()
-			fmt.Println(0)
-			if exitCode == 50 {
-				u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
-			} else {
-				fmt.Println(2)
-				u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
-			}
-		} else {
-			// Handle other types of errors (e.g., command not found)
-			fmt.Println(3)
-			u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
-		}
+	// 	// Check if the error is an ExitError
+	// 	if exitErr, ok := err.(*exec.ExitError); ok {
+	// 		// Get the exit code
+	// 		exitCode := exitErr.ExitCode()
+	// 		fmt.Println(0)
+	// 		if exitCode == 50 {
+	// 			u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+	// 		} else {
+	// 			fmt.Println(2)
+	// 			u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+	// 		}
+	// 	} else {
+	// 		// Handle other types of errors (e.g., command not found)
+	// 		fmt.Println(3)
+	// 		u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting file: %v; MESSAGE: deleted extracted file;INFO: %s; ", err, string(output))
+	// 	}
 
-		u.setState(constants.UpdateStateFailure)
-		u.updateMetadata.Status = string(u.state)
-		// u.updateMetadata.ErrorLog = fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output))
-		u.metadataContent.Update = u.updateMetadata
+	// 	u.setState(constants.UpdateStateFailure)
+	// 	u.updateMetadata.Status = string(u.state)
+	// 	// u.updateMetadata.ErrorLog = fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output))
+	// 	u.metadataContent.Update = u.updateMetadata
 
-		fmt.Println(u.metadataFile)
-		fmt.Println(u.metadataContent)
-		err = u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
-		if err != nil {
-			fmt.Println("ERROR:")
-			fmt.Println(err)
-			// handle - no space left on device error
-		}
+	// 	fmt.Println(u.metadataFile)
+	// 	fmt.Println(u.metadataContent)
+	// 	err = u.FileClient.WriteJsonFile(u.metadataFile, u.metadataContent)
+	// 	if err != nil {
+	// 		fmt.Println("ERROR:")
+	// 		fmt.Println(err)
+	// 		// handle - no space left on device error
+	// 	}
 
-		u.Logger.Error().Err(err).Msg(fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output)))
-		return false
-	}
+	// 	u.Logger.Error().Err(err).Msg(fmt.Sprintf("4 Error extracting file: %v; Message: %s", err, string(output)))
+	// 	return false
+	// }
 
 	// Parse the manifest
 	var manifest models.Manifest
-	if err = json.Unmarshal([]byte(u.updateMetadata.ManifestData), &manifest); err != nil {
+	if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &manifest); err != nil {
 		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error parsing manifest data: %v", err))
 		return false
 	}
@@ -1056,9 +1084,24 @@ func (u *UpdateService) installUpdates() bool {
 
 	// OS Update
 	if manifest.OSUpdate != "" {
-		ok, err := u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + manifest.OSUpdate)
-		if !ok {
-			fmt.Println(err)
+		// _, err := u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + manifest.OSUpdate)
+		// if err != nil {
+		// 	fmt.Println(err)
+		// }
+
+		// update cmdline.txt to in-active partition
+		cpCmd := exec.Command("cp", u.bootPartition.MountPoint+"/cmdline.txt", u.bootPartition.MountPoint+"/cmdline.txt.bak")
+		cpCmdOutput := executeCommmandAndGetStatusCode(cpCmd)
+		if cpCmdOutput == -1 || cpCmdOutput != 0 {
+			fmt.Println("error cp")
+		}
+
+		sedArg1 := fmt.Sprintf("\"s/PARTUUID=[0-9a-fA-F-]\\+/PARTUUID=%s/\"", u.inactivePartition.PARTUUID)
+		sedArg2 := fmt.Sprintf("%s/cmdline.txt", u.bootPartition.MountPoint)
+		updateCmdlineCmd := exec.Command("sed", "-i", sedArg1, sedArg2)
+		updateCmdlineCmdOutput := executeCommmandAndGetStatusCode(updateCmdlineCmd)
+		if updateCmdlineCmdOutput == -1 || updateCmdlineCmdOutput != 0 {
+			fmt.Println("error sed")
 		}
 	}
 
@@ -1095,45 +1138,38 @@ func (u *UpdateService) installUpdates() bool {
 func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 	// Setup loop device and mount the OS update image
 
-	cmd := exec.Command("losetup", "-fP", OSUpdateFile)
-	err, _ := executeCommandAndGetOutput(cmd)
+	checkMountCmd := exec.Command("findmnt", u.inactivePartition.Device)
+	statuscode := executeCommmandAndGetStatusCode(checkMountCmd)
+	fmt.Println(u.inactivePartition.Device)
+	fmt.Println(statuscode)
+	if statuscode == 0 {
+		unmountInactivePartitionCmd := exec.Command("umount", u.inactivePartition.Device)
+		err, _ := executeCommandAndGetOutput(unmountInactivePartitionCmd)
+		if err != nil {
+			return false, err
+		}
+	} else if statuscode > 0 {
+		return false, fmt.Errorf("error running findmnt command, status code: %d", statuscode)
+	} else {
+		return false, fmt.Errorf("findmnt command not found")
+	}
+
+	executeCommandAndWait(exec.Command("ping", "-c", "5", "google.com"))
+
+	updateInactivePartitionCmd := exec.Command("dd", "if="+OSUpdateFile, "of="+u.inactivePartition.Device, "bs=4M", "status=progress", "conv=fsync")
+	ok, err := executeCommandAndWait(updateInactivePartitionCmd)
 	if err != nil {
 		return false, err
 	}
+	if !ok {
+		return false, fmt.Errorf("Failed to update inactive partition")
+	}
 
-	cmd = exec.Command("losetup", "-fP", "--show", OSUpdateFile)
-	err, losetupOutput := executeCommandAndGetOutput(cmd)
+	syncCmd := exec.Command("sync")
+	err, _ = executeCommandAndGetOutput(syncCmd)
 	if err != nil {
 		return false, err
 	}
-	fmt.Println(losetupOutput)
-
-	// losetup -fP $backup_file
-	// loop_dev=$(losetup -fP --show "$backup_file")
-	// kpartx -av $loop_dev
-	// sudo kpartx -av /dev/loop1
-
-	// mkdir -p /data/updates/mnt/backup_{boot,rootfs}
-	// sudo mkdir -p /data/updates/mnt/backup_rootfs
-
-	// mount "${loop_dev_mapped}p1" /data/updates/mnt/backup_boot
-	// mount "${loop_dev_mapped}p2" /data/updates/mnt/backup_rootfs
-	// sudo mount /dev/mapper/loop1p2 /data/updates/mnt/backup_rootfs
-
-	// sudo mount /dev/loop0p2 /data/updates/mnt/backup_rootfs/
-
-	// ionice -c3 rsync -a --info=progress2 --include='/' --exclude='home' --exclude='home/**' --exclude='boot' --exclude='boot/**' /data/updates/mnt/backup_rootfs /b
-
-	// # create symlink for home directory
-	// cd /mnt/sd_rootfs_a/
-	// ln -s data/home home
-	// cd ../../
-
-	// Check if image root size is less than inactive partition size
-
-	// Transfer all system files into inactive partition
-
-	// Unmount and sync the changes
 
 	return true, nil
 }
@@ -1150,49 +1186,111 @@ func (u *UpdateService) deleteExtractedFile(extractedFilePath string) (bool, err
 }
 
 func executeCommandAndGetOutput(cmd *exec.Cmd) (error, string) {
+	fmt.Printf("running cmd: %s\n", cmd.String())
 	output, err := cmd.CombinedOutput() // Captures both stdout and stderr
 	if err != nil {
-		return fmt.Errorf("error running command: %v\n", err), ""
+		return fmt.Errorf("command: %s; error:%v\n", cmd.String(), err), ""
 	}
 	return nil, fmt.Sprint(string(output))
 }
 
 func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
-	// Create pipes to capture stdout and stderr
-	stdoutPipe, err := cmd.StdoutPipe()
+	fmt.Printf("running cmd: %s\n", cmd.String())
+	var outBuf, errBuf bytes.Buffer
+
+	// Multi-writer: terminal + memory buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
+
+	// Run command
+	err := cmd.Run()
+
+	// Check error
 	if err != nil {
-		return false, fmt.Errorf("Error setting up stdout pipe: %v\n", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return false, fmt.Errorf("Error setting up stderr pipe: %v\n", err)
-	}
+		fmt.Println("\nCommand failed:", err)
 
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("Error starting command: %v\n", err)
-	}
-
-	// Read and display stdout in real-time
-	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			fmt.Println(scanner.Text())
+		// Print captured stderr/stdout so we can see the actual cause
+		if errBuf.Len() > 0 {
+			fmt.Println("Error details (stderr):")
+			fmt.Print(errBuf.String())
+			return false, fmt.Errorf("error: %s", errBuf.String())
 		}
-	}()
-
-	// Read and display stderr in real-time
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", scanner.Text())
+		if outBuf.Len() > 0 {
+			fmt.Println("Partial output (stdout):")
+			fmt.Print(outBuf.String())
 		}
-	}()
-
-	// Wait for the command to finish
-	if err := cmd.Wait(); err != nil {
-		return false, fmt.Errorf("command failed: %v\n", err)
 	}
 
 	return true, nil
+}
+
+// func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
+// 	// Create pipes to capture stdout and stderr
+// 	stdoutPipe, err := cmd.StdoutPipe()
+// 	if err != nil {
+// 		return false, fmt.Errorf("Error setting up stdout pipe: %v\n", err)
+// 	}
+// 	stderrPipe, err := cmd.StderrPipe()
+// 	if err != nil {
+// 		return false, fmt.Errorf("Error setting up stderr pipe: %v\n", err)
+// 	}
+
+// 	// Start the command
+// 	if err := cmd.Start(); err != nil {
+// 		return false, fmt.Errorf("Error starting command: %v\n", err)
+// 	}
+
+// 	// Read and display stdout in real-time
+// 	go func() {
+// 		scanner := bufio.NewScanner(stdoutPipe)
+// 		for scanner.Scan() {
+// 			fmt.Println(scanner.Text())
+// 		}
+// 	}()
+
+// 	// Read and display stderr in real-time
+// 	go func() {
+// 		scanner := bufio.NewScanner(stderrPipe)
+// 		for scanner.Scan() {
+// 			fmt.Fprintf(os.Stderr, "Error: %s\n", scanner.Text())
+// 		}
+// 	}()
+
+// 	// Wait for the command to finish
+// 	if err := cmd.Wait(); err != nil {
+// 		return false, fmt.Errorf("command failed: %v\n", err)
+// 	}
+
+// 	return true, nil
+// }
+
+// executeCommmandAndGetStatusCode return status code for a command
+// return 0 if success or error status code or -1 if command does not exist
+func executeCommmandAndGetStatusCode(cmd *exec.Cmd) int {
+	// err := cmd.Run()
+	// if err != nil {
+	// 	// Check if it's an ExitError to get the exit code
+	// 	if exitError, ok := err.(*exec.ExitError); ok {
+	// 		// Get the status code from Sys()
+	// 		statusCode := exitError.Sys().(syscall.WaitStatus).ExitStatus()
+	// 		return statusCode
+	// 	} else {
+	// 		// Could be an execution error, like command not found
+	// 		return -1
+	// 	}
+	// } else {
+	// 	return 0
+	// }
+	fmt.Printf("running cmd: %s\n", cmd.String())
+	if err := cmd.Run(); err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+				return status.ExitStatus()
+			}
+		} else {
+			return -1
+		}
+	}
+	return 0
+
 }
