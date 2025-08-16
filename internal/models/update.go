@@ -27,7 +27,7 @@ type UpdateInstruction struct {
 //	UpdateURL: The URL from where the update files should be downloaded.
 //	Version: The version of the update, used to check if the update is newer than the current version.
 type UpdateCommandPayload struct {
-	ID             string `json:"update_id,omitempty"`
+	UpdateId       string `json:"update_id,omitempty"`
 	UpdateVersion  string `json:"update_version,omitempty"`
 	FileName       string `json:"update_file_name,omitempty"`
 	FileUrl        string `json:"update_file_url,omitempty"`

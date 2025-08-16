@@ -222,18 +222,22 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 			constructor: func() (Service, error) {
 				return services.NewUpdateService(
 					config.Services.Update.Topic,
+					config.Services.Update.AcknowledgementTopic,
 					deviceInfo,
 					config.Services.Update.QOS,
 					sr.mqttClient,
 					sr.fileClient,
 					sr.Logger,
-					config.Services.Update.StateFile,
-					config.Services.Update.UpdateFilePath,
+					config.Services.Update.MetadataFile,
 					sr.S3,
 				), nil
 			},
 		},
 	}
+
+	fmt.Println("11111111111111 ", config.Services.Update.Topic)
+	fmt.Println("11111111111111 ", config.Services.Update.MetadataFile)
+	fmt.Println("11111111111111 ", config.Services.Update.AcknowledgementTopic)
 
 	// Register services in the predefined order
 	registeredServices := []string{}

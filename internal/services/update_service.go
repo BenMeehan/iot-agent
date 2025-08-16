@@ -30,13 +30,14 @@ import (
 
 // UpdateService struct with FSM
 type UpdateService struct {
-	SubTopic   string
-	DeviceInfo identity.DeviceInfoInterface
-	QOS        int
-	MqttClient mqtt.MQTTClient
-	Logger     zerolog.Logger
-	S3         s3.ObjectStorageClient
-	FileClient file.FileOperations
+	SubTopic                       string
+	SharedAcknowledgementMqttTopic string
+	DeviceInfo                     identity.DeviceInfoInterface
+	QOS                            int
+	MqttClient                     mqtt.MQTTClient
+	Logger                         zerolog.Logger
+	S3                             s3.ObjectStorageClient
+	FileClient                     file.FileOperations
 
 	state               constants.UpdateState
 	validTransitions    map[constants.UpdateState][]constants.UpdateState
@@ -53,18 +54,19 @@ type UpdateService struct {
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
-func NewUpdateService(subTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
+func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
 	mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger zerolog.Logger,
-	stateFile string, updateFilePath string, s3 s3.ObjectStorageClient) *UpdateService {
+	metadataFile string, s3 s3.ObjectStorageClient) *UpdateService {
 
 	return &UpdateService{
-		SubTopic:   subTopic,
-		DeviceInfo: deviceInfo,
-		QOS:        qos,
-		MqttClient: mqttClient,
-		Logger:     logger,
-		S3:         s3,
-		FileClient: fileClient,
+		SubTopic:                       subTopic,
+		SharedAcknowledgementMqttTopic: sharedAcknowledgementMqttTopic,
+		DeviceInfo:                     deviceInfo,
+		QOS:                            qos,
+		MqttClient:                     mqttClient,
+		Logger:                         logger,
+		S3:                             s3,
+		FileClient:                     fileClient,
 
 		state: constants.UpdateStateIdle, // Assuming an initial state
 		validTransitions: map[constants.UpdateState][]constants.UpdateState{
@@ -137,15 +139,15 @@ func (u *UpdateService) Start() error {
 				return err
 			}
 
-			sharedAckTopic := "agent-updates"
+			// sharedAckTopic := u.SharedAcknowledgementMqttTopic
 
-			token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+			token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
 			token.Wait()
 			if token.Error() != nil {
 				u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
 				return token.Error()
 			} else {
-				u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+				u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
 			}
 
 		} else if prevState == string(constants.UpdateStateVerifying) {
@@ -245,7 +247,7 @@ func (u *UpdateService) SubscribeMQTTEndpoint() {
 		u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
 	}
 
-	// Subscribe from the MQTT topic and handle update
+	// Subscribe for update messages
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
 	token = u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
 	token.Wait()
@@ -353,8 +355,8 @@ func (u *UpdateService) verifySystemPartition() error {
 	}
 	fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
 
-	// Storing metadata file in data partition
-	u.metadataFile = dataPartition.MountPoint + "/updates/updates-metadata.json"
+	// Storing metadata file with path in data partition
+	u.metadataFile = dataPartition.MountPoint + "/updates/" + u.metadataFile
 	u.fileMetadataContent = models.PartitionMetadata{
 		TimeStamp:         time.Now().UTC(),
 		ActivePartition:   activePartition,
@@ -435,10 +437,13 @@ func contains(slice []string, item string) bool {
 func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
+	fmt.Println("--- ", string(u.state))
+	fmt.Println("--- ", string(msg.Payload()))
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to parse update command payload")
 		return
 	}
+	fmt.Println("--- ID", payload.UpdateId)
 
 	// u.Logger.Info().
 	// 	Str("UpdateURL", payload.FileUrl).
@@ -448,7 +453,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	// Create the update metadata
 	u.updateMetadata = models.UpdatesMetaData{
 		TimeStamp:      time.Now().UTC(),
-		UpdateId:       payload.ID,
+		UpdateId:       payload.UpdateId,
 		FileUrl:        payload.FileUrl,
 		FileName:       payload.FileName,
 		FileSize:       payload.FileSize,
@@ -504,10 +509,10 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	}
 
 	// Send mqtt message and get acknowledgment for downloading
-	sharedAckTopic := "agent-updates"
+	// sharedAckTopic :=
 
 	mqttPayload := &models.StatusUpdatePayload{
-		UpdateId: payload.ID,
+		UpdateId: payload.UpdateId,
 		DeviceId: u.DeviceInfo.GetDeviceID(),
 		Status:   string(u.state),
 	}
@@ -516,14 +521,14 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 		return
 	}
-
-	token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+	fmt.Println("=== ", u.SharedAcknowledgementMqttTopic)
+	token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
 	token.Wait()
 	if token.Error() != nil {
 		u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
 		return
 	} else {
-		u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+		u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
 	}
 
 	u.UpdateProcssFlow()
@@ -531,7 +536,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 func (u *UpdateService) UpdateProcssFlow() {
 
 	retry := 1
-	sharedAckTopic := "agent-updates"
+	sharedAckTopic := u.SharedAcknowledgementMqttTopic
 	u.wg.Add(1)
 	// go routine for proceeding with next step
 	go func() {
@@ -612,51 +617,43 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// Download file the file and send mqtt message for installing
-					if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/updates/"+u.updateMetadata.FileName); err != nil {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Error downloading update file: %v", err)
-						u.fileMetadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+					// if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/updates/"+u.updateMetadata.FileName); err != nil {
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = fmt.Sprintf("Error downloading update file: %v", err)
+					// 	u.fileMetadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
-						u.Logger.Error().Err(err).Msg("Failed to download file")
-						return
-					}
-
-					// Check checksum
-					// file, _ := u.FileClient.GetFileMultipartFormData(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
-					// fileContents, _ := file.Open()
-					// sha256Hasher := sha256.New()
-					// if _, err := io.Copy(sha256Hasher, fileContents); err != nil {
-					// 	fmt.Println("CHECKSUM ERROR...")
+					// 	u.Logger.Error().Err(err).Msg("Failed to download file")
 					// 	return
 					// }
 
-					checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
-					fmt.Println(checksumValue, ":::", u.updateMetadata.SHA256Checksum)
-					if err != nil {
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Error validating checksum: %v", err)
-						u.fileMetadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+					// Vadlidate file checksum
+					// checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
+					// fmt.Println(checksumValue, ":::", u.updateMetadata.SHA256Checksum)
+					// if err != nil {
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = fmt.Sprintf("Error validating checksum: %v", err)
+					// 	u.fileMetadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
-						u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
-						return
-					}
-					if checksumValue == u.updateMetadata.SHA256Checksum {
-						fmt.Println("CHECKSUM MATCH...")
-					} else {
-						fmt.Println("CHECKSUM MISMATCH...")
-						u.setState(constants.UpdateStateFailure)
-						u.updateMetadata.Status = string(u.state)
-						u.updateMetadata.ErrorLog = fmt.Sprintf("Incorrect checksum: %v", err)
-						u.fileMetadataContent.Update = u.updateMetadata
-						u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+					// 	u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
+					// 	return
+					// }
+					// if checksumValue == u.updateMetadata.SHA256Checksum {
+					// 	fmt.Println("CHECKSUM MATCH...")
+					// } else {
+					// 	fmt.Println("CHECKSUM MISMATCH...")
+					// 	u.setState(constants.UpdateStateFailure)
+					// 	u.updateMetadata.Status = string(u.state)
+					// 	u.updateMetadata.ErrorLog = fmt.Sprintf("Incorrect checksum: %v", err)
+					// 	u.fileMetadataContent.Update = u.updateMetadata
+					// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
-						u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
-						return
-					}
+					// 	u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
+					// 	return
+					// }
 
 					// Update state to installing and send mqtt request
 					if err := u.setState(constants.UpdateStateInstalling); err != nil {
