@@ -86,16 +86,14 @@ func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, de
 func (u *UpdateService) Start() error {
 	u.ackChannel = make(chan models.Ack)
 
-	fmt.Printf("Start state: %s\n", u.state)
-
 	// Check if system is linux
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("Current system is not linux. Update service is incompatible with %s", runtime.GOOS)
+		return fmt.Errorf("current system is not linux. update service is incompatible with %s", runtime.GOOS)
 	}
 
 	// Verify system partition and write metadata file
 	if err := u.verifySystemPartition(); err != nil {
-		return fmt.Errorf("Error verifying system partitions! Update service can't be run in this system. Error: %v", err)
+		return fmt.Errorf("error verifying system partitions. update service can't be run in this system. error: %v", err)
 	}
 
 	// NEED TO RESUME FROM PREVIOUS UPDATE STATE
@@ -103,14 +101,17 @@ func (u *UpdateService) Start() error {
 	if isFileExists {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
 		if err != nil {
-			return fmt.Errorf("Error reading metadata file: %v", err)
+			return fmt.Errorf("error reading metadata file: %v", err)
 		}
 
 		if err := json.Unmarshal([]byte(metadataFileContent), &u.fileMetadataContent); err != nil {
-			return fmt.Errorf("Error unmashal metadata file: %v", err)
+			return fmt.Errorf("error unmashal metadata file: %v", err)
 		}
 
 		u.updateMetadata = u.fileMetadataContent.Update
+		if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
+			return fmt.Errorf("error unmashal metadata file: %v", err)
+		}
 		u.state = constants.UpdateStateInstalling
 
 		prevState := u.fileMetadataContent.Update.Status
@@ -129,11 +130,6 @@ func (u *UpdateService) Start() error {
 			}
 			mqttPayloadBytes, err := json.Marshal(&mqttPayload)
 			if err != nil {
-				// u.setState(constants.UpdateStateFailure)
-				// u.fileMetadataContent.Update.ErrorLog = fmt.Sprintf("%v", err)
-				// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-				// u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 				u.failedExecution(err, "Failed to marshal mqtt payload")
 				return err
 			}
@@ -145,18 +141,12 @@ func (u *UpdateService) Start() error {
 			if token.Error() != nil {
 				u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
 				return token.Error()
-			} else {
-				u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
 			}
-
 		} else if prevState == string(constants.UpdateStateVerifying) {
-			fmt.Printf("PREV 2::: %s\n", prevState)
 			u.SubscribeMQTTEndpoint()
 			u.UpdateProcssFlow()
 
-			fmt.Printf("PREV 3::: %s\n", u.state)
 			u.state = constants.UpdateState(prevState)
-			fmt.Printf("PREV 4::: %s\n", u.state)
 
 			// Send success acknowledgment data to ack channel
 			mqttPayload := &models.Ack{
@@ -166,11 +156,6 @@ func (u *UpdateService) Start() error {
 			}
 			mqttPayloadBytes, err := json.Marshal(&mqttPayload)
 			if err != nil {
-				// u.setState(constants.UpdateStateFailure)
-				// u.fileMetadataContent.Update.ErrorLog = fmt.Sprintf("%v", err)
-				// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-				// u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
-
 				u.failedExecution(err, "Failed to marshal mqtt payload")
 				return err
 			}
@@ -192,41 +177,17 @@ func (u *UpdateService) Start() error {
 	} else {
 		// If file exists and can't read because of permission issues
 		if err != nil {
-			return fmt.Errorf("Unable to read metadata file: %v", err)
+			return fmt.Errorf("unable to read metadata file: %v", err)
 		}
 
 		// File does not exist
 		if err := u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent); err != nil {
-			return fmt.Errorf("Unable to write metadata file: %v", err)
+			return fmt.Errorf("unable to write metadata file: %v", err)
 		}
 
 		// New metadata file created and listen for mqtt
 		u.SubscribeMQTTEndpoint()
 	}
-
-	// // Subscribe for acknowledgment messages
-	// ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
-	// token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
-	// token.Wait()
-	// if token.Error() != nil {
-	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + ackTopic)
-	// } else {
-	// 	u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
-	// }
-
-	// // Subscribe from the MQTT topic and handle update
-	// topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	// token = u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
-	// token.Wait()
-	// if token.Error() != nil {
-	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + topic)
-	// } else {
-	// 	u.Logger.Info().Str("topic", topic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", topic))
-	// }
-
-	// u.Logger.Info().Msg("Starting wait group")
-	// u.wg.Wait()
-
 	return nil
 }
 
@@ -264,13 +225,13 @@ func (u *UpdateService) verifySystemPartition() error {
 	// Get all mounted partitions
 	mounts, err := getMounts()
 	if err != nil {
-		return fmt.Errorf("Error reading mounts: %v", err)
+		return fmt.Errorf("error reading mounts: %v", err)
 	}
 
 	// Get PARTUUIDs for all devices
 	partuuidMap, err := getPARTUUIDs()
 	if err != nil {
-		return fmt.Errorf("Warning: %v. UUIDs will be unavailable.", err)
+		return fmt.Errorf("uuid unavailable: %v", err)
 	}
 
 	// Assign PARTUUIDs to partitions
@@ -305,54 +266,42 @@ func (u *UpdateService) verifySystemPartition() error {
 	u.dataPartition = dataPartition
 
 	// Print partition information in the requested format
-	fmt.Println("Partition Information:")
 	if activePartition.Device != "" {
 		uuid := activePartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("Active Partition: %s (mounted at %s, UUID: %s)\n",
-			activePartition.Device, activePartition.MountPoint, uuid)
 	} else {
-		fmt.Println("Active Partition: Not found")
+		fmt.Errorf("active partition not found")
 	}
+
 	if inactivePartition.Device != "" {
 		uuid := inactivePartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("Inactive Partition: %s (mounted at %s, UUID: %s)\n",
-			inactivePartition.Device, inactivePartition.MountPoint, uuid)
 	} else {
-		fmt.Println("Inactive Partition: Not found")
-
-		// // If in-active not found, reboot the device
-		// rebootCmd := exec.Command("reboot")
-		// executeCommandAndGetOutput(rebootCmd)
+		fmt.Errorf("inactive partition not found")
 	}
 	if dataPartition.Device != "" {
 		uuid := dataPartition.PARTUUID
 		if uuid == "" {
 			uuid = "N/A"
 		}
-		fmt.Printf("Data Partition: %s (mounted at %s, UUID: %s)\n",
-			dataPartition.Device, dataPartition.MountPoint, uuid)
 	} else {
-		fmt.Println("Data Partition: Not found")
+		fmt.Errorf("data partition not found")
 	}
 
 	// Create /data/updates and /data/mnt/inactive
 	err = os.MkdirAll(u.dataPartition.MountPoint+"/updates", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
 	if err != nil {
-		return fmt.Errorf("Error creating directory: %v\n", err)
+		return fmt.Errorf("error creating directory: %v", err)
 	}
-	fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/update")
 
 	err = os.MkdirAll(u.dataPartition.MountPoint+"/mnt/inactive", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
 	if err != nil {
-		return fmt.Errorf("Error creating directory: %v\n", err)
+		return fmt.Errorf("error creating directory: %v", err)
 	}
-	fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
 
 	// Storing metadata file with path in data partition
 	u.metadataFile = dataPartition.MountPoint + "/updates/" + u.metadataFile
@@ -436,18 +385,11 @@ func contains(slice []string, item string) bool {
 func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
-	fmt.Println("--- ", string(u.state))
-	fmt.Println("--- ", string(msg.Payload()))
+
 	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
 		u.Logger.Error().Err(err).Msg("Failed to parse update command payload")
 		return
 	}
-	fmt.Println("--- ID", payload.UpdateId)
-
-	// u.Logger.Info().
-	// 	Str("UpdateURL", payload.FileUrl).
-	// 	Str("Version", payload.UpdateVersion).
-	// 	Msg("Parsed update command payload")
 
 	// Create the update metadata
 	u.updateMetadata = models.UpdatesMetaData{
@@ -467,7 +409,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	var localMetadataFileContent models.PartitionMetadata
 	oldVersion := "0.0.0"
 	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
-	if isFileExists {
+	if isFileExists && err == nil {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
 		if err != nil {
 			u.Logger.Error().Err(err).Msg("Error reading metadata file")
@@ -487,14 +429,6 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	// Check if the version is new
 	isNewVersionUpdate, err := u.isNewVersion(oldVersion, payload.UpdateVersion)
 	if err != nil {
-		// u.setState(constants.UpdateStateFailure)
-		// u.updateMetadata.Status = string(u.state)
-		// u.updateMetadata.ErrorLog = fmt.Sprintf("Error validating version: %v", err)
-		// u.fileMetadataContent.Update = u.updateMetadata
-		// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		// u.Logger.Error().Err(err).Msg("Error validating version")
-
 		u.failedExecution(err, "Error validating version")
 		return
 	}
@@ -510,9 +444,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		return
 	}
 
-	// Send mqtt message and get acknowledgment for downloading
-	// sharedAckTopic :=
-
+	// send downloading mqtt message
 	mqttPayload := &models.Ack{
 		UpdateId: payload.UpdateId,
 		DeviceId: u.DeviceInfo.GetDeviceID(),
@@ -523,7 +455,7 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 		return
 	}
-	fmt.Println("=== ", u.SharedAcknowledgementMqttTopic)
+
 	token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
 	token.Wait()
 	if token.Error() != nil {
@@ -555,11 +487,9 @@ func (u *UpdateService) UpdateProcssFlow() {
 				// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 				// }
 
-				// fmt.Println("ACK: ", ack)
 				if ack.Status == string(constants.UpdateStateDownloading) {
 					retry = 0
 
-					fmt.Println("DOWNLOADING...")
 					u.updateMetadata.Status = string(u.state)
 					u.fileMetadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
@@ -567,69 +497,39 @@ func (u *UpdateService) UpdateProcssFlow() {
 					// Create /data/updates and /data/mnt/inactive
 					err := os.MkdirAll(u.dataPartition.MountPoint+"/updates", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
 					if err != nil {
-						fmt.Printf("Error creating directory: %v\n", err)
+						u.failedExecution(err, "error creating directory")
 						return
 					}
-					fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/update")
 
 					err = os.MkdirAll(u.dataPartition.MountPoint+"/mnt/inactive", 0755) // 0755 sets permissions (read/write/execute for owner, read/execute for group/others)
 					if err != nil {
-						fmt.Printf("Error creating directory: %v\n", err)
+						u.failedExecution(err, "error creating directory")
 						return
 					}
-					fmt.Printf("Directory '%s' created successfully.\n", u.dataPartition.MountPoint+"/mnt/inactive")
 
 					// Check if the space on dataPartition > fileSize
 					cmdStr := fmt.Sprintf("df -m %s | awk 'NR==2 {print $4}'", u.dataPartition.MountPoint)
 					cmd := exec.Command("sh", "-c", cmdStr)
 
-					err, output := executeCommandAndGetOutput(cmd)
+					output, err := executeCommandAndGetOutput(cmd)
 					if err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("error getting free space: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg(fmt.Sprintf("error getting free space: %v", err))
 						u.failedExecution(err, "error while getting free device space")
 						return
 					}
 
-					updateLocationSpace, err := strconv.ParseFloat(strings.TrimSpace(output), 2)
+					updateLocationSpace, err := strconv.ParseFloat(strings.TrimSpace(output), 32)
 					if err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Invalid bytes number: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg(fmt.Sprintf("Invalid bytes number: %v", err))
 						u.failedExecution(err, "invalid bytes number")
 						return
 					}
-					fileSizeInt, err := strconv.ParseFloat(u.fileMetadataContent.Update.FileSize, 2)
+					fileSizeInt, err := strconv.ParseFloat(u.fileMetadataContent.Update.FileSize, 32)
 					if updateLocationSpace < fileSizeInt {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("insufficient space: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg(fmt.Sprintf("insufficient space: %v", err))
 						u.failedExecution(err, "insufficient space in device")
 						return
 					}
 
 					// Download file the file and send mqtt message for installing
 					if err := u.S3.DownloadFileByPresignedURL(u.updateMetadata.FileUrl, u.dataPartition.MountPoint+"/updates/"+u.updateMetadata.FileName); err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Error downloading update file: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg("Failed to download file")
 						u.failedExecution(err, "failed to download update file")
 						return
 					}
@@ -637,41 +537,22 @@ func (u *UpdateService) UpdateProcssFlow() {
 					// Vadlidate file checksum
 					checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
 					if err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Error validating checksum: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
 						u.failedExecution(err, "error validating checksum")
 						return
 					}
-					if checksumValue != u.updateMetadata.SHA256Checksum {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Incorrect checksum: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
-						// u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
+					if checksumValue != u.updateMetadata.SHA256Checksum {
 						u.failedExecution(err, "incorrect checksum")
 						return
 					}
 
 					// Update state to installing and send mqtt request
 					if err := u.setState(constants.UpdateStateInstalling); err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Error updating state from downloading to installing: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
 						u.failedExecution(err, "error updating state from downloading to installing")
 						return
 					}
 
+					// send installing mqtt message
 					mqttPayload := &models.Ack{
 						UpdateId: u.updateMetadata.UpdateId,
 						DeviceId: u.DeviceInfo.GetDeviceID(),
@@ -679,13 +560,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 					mqttPayloadBytes, err := json.Marshal(&mqttPayload)
 					if err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal mqtt download payload: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 						u.failedExecution(err, "failed to marshal mqtt payload")
 						return
 					}
@@ -693,13 +567,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 					token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
 					token.Wait()
 					if token.Error() != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to publish mqtt installing message: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(token.Error()).Msg("Failed to publish mqtt installing message")
 						u.failedExecution(err, "failed to publish mqtt installing message")
 						return
 					}
@@ -707,77 +574,68 @@ func (u *UpdateService) UpdateProcssFlow() {
 				} else if ack.Status == string(constants.UpdateStateInstalling) {
 					retry = 0
 
-					fmt.Println("INSTALLING...")
-
-					// If in-active partition not found, reboot the device
-					// if u.inactivePartition.Device == "" {
-					// 	rebootCmd := exec.Command("reboot")
-					// 	executeCommandAndGetOutput(rebootCmd)
-					// }
-
 					u.updateMetadata.Status = string(u.state)
 					u.fileMetadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
+					// starting os, file, folder updates
 					if !u.installUpdates() {
 						return
 					}
 
 					// Update state to verifying
 					if err := u.setState(constants.UpdateStateVerifying); err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = "Error updating state from installing to verifying"
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// e := u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-						// fmt.Println("ERROR:")
-						// fmt.Println(e)
-
-						// u.Logger.Error().Err(err).Msg("Error updating state from installing to verifying")
 						u.failedExecution(err, "error updating state from installing to verifying")
 						return
 					}
+
+					// update metadata file
+					u.updateMetadata.Status = string(u.state)
+					u.fileMetadataContent.Update = u.updateMetadata
+					u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
 					// Reboot if os update was executed, else send mqtt message to verifying
 					if u.manifest.OSUpdate != "" {
 						rebootCmd := exec.Command("reboot")
 						rebootCmdOutput := executeCommmandAndGetStatusCode(rebootCmd)
 						if rebootCmdOutput == -1 || rebootCmdOutput != 0 {
-							fmt.Println("reboot failed")
+							u.failedExecution(fmt.Errorf("reboot failed"), "error running reboot command")
 						}
 						return
+					} else {
+						// send verifying mqtt message
+						mqttPayload := &models.Ack{
+							UpdateId: u.updateMetadata.UpdateId,
+							DeviceId: u.DeviceInfo.GetDeviceID(),
+							Status:   string(u.state),
+						}
+						mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+						if err != nil {
+							u.failedExecution(err, "failed to marshal mqtt payload")
+							return
+						}
+
+						token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+						token.Wait()
+						if token.Error() != nil {
+							u.failedExecution(err, "failed to publish mqtt installing message")
+							return
+						}
 					}
 
 				} else if ack.Status == string(constants.UpdateStateVerifying) {
-					fmt.Println("VERIFYING...")
 
-					if u.activePartition.PARTUUID != u.fileMetadataContent.InActivePartition.PARTUUID {
-						// boot failed, failure mssg to mqtt
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("boot failed")
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(fmt.Errorf("boot failed")).Msg("boot failed")
+					if u.manifest.OSUpdate != "" && u.activePartition.PARTUUID != u.fileMetadataContent.InActivePartition.PARTUUID {
 						u.failedExecution(fmt.Errorf("boot failed"), "failed to switch partition")
 						return
 					}
 
-					// success message
-					// Update state to installing and send mqtt request
 					if err := u.setState(constants.UpdateStateSuccess); err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Error updating state from downloading to installing: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-						// u.Logger.Error().Err(err).Msg("Error updating state from downloading to installing")
-
 						u.failedExecution(err, "error updating state from installing to verifying")
 						return
 					}
 
+					// send success mqtt message
 					mqttPayload := &models.Ack{
 						UpdateId: u.updateMetadata.UpdateId,
 						DeviceId: u.DeviceInfo.GetDeviceID(),
@@ -785,13 +643,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 					mqttPayloadBytes, err := json.Marshal(&mqttPayload)
 					if err != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to marshal mqtt download payload: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
 						u.failedExecution(err, "failed to marshal mqtt payload")
 						return
 					}
@@ -799,13 +650,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 					token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
 					token.Wait()
 					if token.Error() != nil {
-						// u.setState(constants.UpdateStateFailure)
-						// u.updateMetadata.Status = string(u.state)
-						// u.updateMetadata.ErrorLog = fmt.Sprintf("Failed to publish mqtt installing message: %v", err)
-						// u.fileMetadataContent.Update = u.updateMetadata
-						// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-						// u.Logger.Error().Err(token.Error()).Msg("Failed to publish mqtt installing message")
 						u.failedExecution(token.Error(), "failed to publish mqtt message")
 						return
 					}
@@ -813,7 +657,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 				} else if ack.Status == string(constants.UpdateStateSuccess) {
 					retry = 0
 
-					fmt.Println("Success")
 					u.updateMetadata.Status = string(u.state)
 					u.fileMetadataContent.Update = u.updateMetadata
 					u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
@@ -825,7 +668,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 			case <-time.After(1 * time.Second):
 				retry++
-				fmt.Println("RETRY: ", retry)
 				time.Sleep(5 * time.Second)
 
 				mqttPayload := &models.Ack{
@@ -849,15 +691,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 				}
 
 				if retry > 5 {
-					// u.setState(constants.UpdateStateFailure)
-					// u.updateMetadata.Status = string(u.state)
-					// u.updateMetadata.ErrorLog = "Max retries reached. Failed to get acklowledgment message."
-					// u.fileMetadataContent.Update = u.updateMetadata
-					// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-					// u.setState(constants.UpdateStateIdle)
-
 					u.failedExecution(fmt.Errorf("failed to get mqtt acklowledgment message"), "max retries reached")
-
 					return
 				}
 			}
@@ -874,8 +708,6 @@ func (u *UpdateService) handleAckMessages(client MQTT.Client, msg MQTT.Message) 
 		return
 	}
 
-	// fmt.Println(string(msg.Payload()))
-	// fmt.Println("ACK DATA: ", payload)
 	// Send acknowledgment to channel
 	u.ackChannel <- payload
 }
@@ -919,11 +751,6 @@ func (u *UpdateService) isValidTransition(newState constants.UpdateState) bool {
 
 // isNewVersion checks if the new version is newer than the current version using semantic versioning
 func (u *UpdateService) isNewVersion(currentVersionStr, newVersion string) (bool, error) {
-	// currentVersionStr, err := u.readCurrentVersion()
-	// if err != nil {
-	// 	return false, err
-	// }
-	// fmt.Println(currentVersionStr)
 
 	// Parse the current and new version strings into semver.Version
 	currentVersion, err := semver.NewVersion(currentVersionStr)
@@ -940,90 +767,11 @@ func (u *UpdateService) isNewVersion(currentVersionStr, newVersion string) (bool
 	return newVersionParsed.GreaterThan(currentVersion), nil
 }
 
-// readCurrentVersion reads the current version from configs/version.txt
-// func (u *UpdateService) readCurrentVersion() (string, error) {
-// 	versionFile := filepath.Join("configs", "version.txt")
-// 	data, err := u.FileClient.ReadFile(versionFile)
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	return data, nil
-// }
-
-func (u *UpdateService) installDebPackage() bool {
-	// Install the update and send mqtt message for success
-	updateZipFileLocation := u.dataPartition.MountPoint + "/" + u.fileMetadataContent.Update.FileName
-	if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
-		u.setState(constants.UpdateStateFailure)
-		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
-		u.fileMetadataContent.Update = u.updateMetadata
-		u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Zip file does not exist in device: %v", err))
-		return false
-	}
-
-	// Unzip the .zip file
-	// fmt.Println(updateZipFileLocation, u.dataPartition.MountPoint)
-	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint) // -o to overwrite if extract already exists
-	_, err := cmd.CombinedOutput()
-	if err != nil {
-		// u.setState(constants.UpdateStateFailure)
-		// u.updateMetadata.Status = string(u.state)
-		// u.updateMetadata.ErrorLog = fmt.Sprintf("Error extracting the file: %v", err)
-		// u.fileMetadataContent.Update = u.updateMetadata
-		// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		// u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error extracting the file: %v", err))
-		u.failedExecution(err, "error extracting update file")
-		return false
-	}
-
-	updateFileLocation := updateZipFileLocation[:len(updateZipFileLocation)-4]
-	// fmt.Println(updateFileLocation)
-
-	// Check if file has .deb extension
-	if !strings.HasSuffix(strings.ToLower(updateFileLocation), ".deb") {
-		u.setState(constants.UpdateStateFailure)
-		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation)
-		u.fileMetadataContent.Update = u.updateMetadata
-		u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error updating file '%s' is not a .deb file", updateFileLocation))
-		return false
-	}
-
-	// Install .deb update file
-	cmd = exec.Command("dpkg", "-i", updateFileLocation)
-	_, err = cmd.CombinedOutput()
-	if err != nil {
-		u.setState(constants.UpdateStateFailure)
-		u.updateMetadata.Status = string(u.state)
-		u.updateMetadata.ErrorLog = fmt.Sprintf("Error installing update: %v", err)
-		u.fileMetadataContent.Update = u.updateMetadata
-		u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error installing update: %v", err))
-		return false
-	}
-
-	return true
-}
-
 // installUpdates will update and send mqtt message for success
 func (u *UpdateService) installUpdates() bool {
 
 	updateZipFileLocation := u.dataPartition.MountPoint + "/updates/" + u.fileMetadataContent.Update.FileName
 	if _, err := os.Stat(updateZipFileLocation); os.IsNotExist(err) {
-		// u.setState(constants.UpdateStateFailure)
-		// u.updateMetadata.Status = string(u.state)
-		// u.updateMetadata.ErrorLog = fmt.Sprintf("Zip file does not exist in device: %v", err)
-		// u.fileMetadataContent.Update = u.updateMetadata
-		// u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-
-		// u.Logger.Error().Err(err).Msg(fmt.Sprintf("Zip file does not exist in device: %v", err))
 		u.failedExecution(err, "unable to locate zip file")
 		return false
 	}
@@ -1055,9 +803,7 @@ func (u *UpdateService) installUpdates() bool {
 	}
 
 	// Parse the manifest
-	//var u.manifest models.Manifest
 	if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
-		// u.Logger.Error().Err(err).Msg(fmt.Sprintf("Error parsing manifest data: %v", err))
 		u.failedExecution(err, "error parsing manifest data")
 		return false
 	}
@@ -1092,7 +838,6 @@ func (u *UpdateService) installUpdates() bool {
 	for _, manifestFileUpdate := range u.manifest.Updates.FolderUpdates {
 		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
 		to_path := manifestFileUpdate.Path
-		fmt.Println(from_path, to_path)
 
 		if manifestFileUpdate.Overwrite {
 			cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", "--delete", from_path, to_path)
@@ -1115,9 +860,8 @@ func (u *UpdateService) installUpdates() bool {
 	for _, manifestFileUpdate := range u.manifest.Updates.FileUpdates {
 		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
 		to_path := manifestFileUpdate.Path
-		fmt.Println(from_path, to_path)
 
-		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", u.dataPartition.MountPoint+"/updates/"+manifestFileUpdate.Update, manifestFileUpdate.Path)
+		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
 		_, err := executeCommandAndWait(cmd)
 		if err != nil {
 			u.failedExecution(err, "error on file update")
@@ -1136,7 +880,7 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 	statuscode := executeCommmandAndGetStatusCode(checkMountCmd)
 	if statuscode == 0 {
 		unmountInactivePartitionCmd := exec.Command("umount", u.inactivePartition.Device)
-		err, _ := executeCommandAndGetOutput(unmountInactivePartitionCmd)
+		_, err := executeCommandAndGetOutput(unmountInactivePartitionCmd)
 		if err != nil {
 			return false, err
 		}
@@ -1152,11 +896,11 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 		return false, err
 	}
 	if !ok {
-		return false, fmt.Errorf("Failed to update inactive partition")
+		return false, fmt.Errorf("failed to update inactive partition")
 	}
 
 	syncCmd := exec.Command("sync")
-	err, _ = executeCommandAndGetOutput(syncCmd)
+	_, err = executeCommandAndGetOutput(syncCmd)
 	if err != nil {
 		return false, err
 	}
@@ -1208,13 +952,12 @@ func (u *UpdateService) deleteExtractedFile(extractedFilePath string) (bool, err
 	return true, nil
 }
 
-func executeCommandAndGetOutput(cmd *exec.Cmd) (error, string) {
-	fmt.Printf("running cmd: %s\n", cmd.String())
+func executeCommandAndGetOutput(cmd *exec.Cmd) (string, error) {
 	output, err := cmd.CombinedOutput() // Captures both stdout and stderr
 	if err != nil {
-		return fmt.Errorf("command: %s; error:%v\n", cmd.String(), err), ""
+		return "", fmt.Errorf("command: %s; error:%v", cmd.String(), err)
 	}
-	return nil, fmt.Sprint(string(output))
+	return fmt.Sprint(string(output)), nil
 }
 
 func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
@@ -1244,64 +987,9 @@ func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
 	return true, nil
 }
 
-// func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
-// 	// Create pipes to capture stdout and stderr
-// 	stdoutPipe, err := cmd.StdoutPipe()
-// 	if err != nil {
-// 		return false, fmt.Errorf("Error setting up stdout pipe: %v\n", err)
-// 	}
-// 	stderrPipe, err := cmd.StderrPipe()
-// 	if err != nil {
-// 		return false, fmt.Errorf("Error setting up stderr pipe: %v\n", err)
-// 	}
-
-// 	// Start the command
-// 	if err := cmd.Start(); err != nil {
-// 		return false, fmt.Errorf("Error starting command: %v\n", err)
-// 	}
-
-// 	// Read and display stdout in real-time
-// 	go func() {
-// 		scanner := bufio.NewScanner(stdoutPipe)
-// 		for scanner.Scan() {
-// 			fmt.Println(scanner.Text())
-// 		}
-// 	}()
-
-// 	// Read and display stderr in real-time
-// 	go func() {
-// 		scanner := bufio.NewScanner(stderrPipe)
-// 		for scanner.Scan() {
-// 			fmt.Fprintf(os.Stderr, "Error: %s\n", scanner.Text())
-// 		}
-// 	}()
-
-// 	// Wait for the command to finish
-// 	if err := cmd.Wait(); err != nil {
-// 		return false, fmt.Errorf("command failed: %v\n", err)
-// 	}
-
-// 	return true, nil
-// }
-
 // executeCommmandAndGetStatusCode return status code for a command
 // return 0 if success or error status code or -1 if command does not exist
 func executeCommmandAndGetStatusCode(cmd *exec.Cmd) int {
-	// err := cmd.Run()
-	// if err != nil {
-	// 	// Check if it's an ExitError to get the exit code
-	// 	if exitError, ok := err.(*exec.ExitError); ok {
-	// 		// Get the status code from Sys()
-	// 		statusCode := exitError.Sys().(syscall.WaitStatus).ExitStatus()
-	// 		return statusCode
-	// 	} else {
-	// 		// Could be an execution error, like command not found
-	// 		return -1
-	// 	}
-	// } else {
-	// 	return 0
-	// }
-	fmt.Printf("running cmd: %s\n", cmd.String())
 	if err := cmd.Run(); err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
@@ -1312,5 +1000,4 @@ func executeCommmandAndGetStatusCode(cmd *exec.Cmd) int {
 		}
 	}
 	return 0
-
 }
