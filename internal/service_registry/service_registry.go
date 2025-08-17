@@ -235,10 +235,6 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, deviceInfo ide
 		},
 	}
 
-	fmt.Println("11111111111111 ", config.Services.Update.Topic)
-	fmt.Println("11111111111111 ", config.Services.Update.MetadataFile)
-	fmt.Println("11111111111111 ", config.Services.Update.AcknowledgementTopic)
-
 	// Register services in the predefined order
 	registeredServices := []string{}
 	for _, svc := range servicesInOrder {

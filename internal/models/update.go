@@ -71,6 +71,7 @@ type StatusUpdatePayload struct {
 
 type Ack struct {
 	UpdateId string `json:"update_id"`
+	DeviceId string `json:"device_id"`
 	Status   string `json:"status"`
 	Error    string `json:"error"`
 }
