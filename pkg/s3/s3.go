@@ -110,7 +110,6 @@ func (o *ObjectStorage) DownloadFileByPresignedURL(presignedURL string, outputPa
 	}
 
 	// Create or check directory
-	fmt.Println(outputPath)
 	dir := filepath.Dir(outputPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("Failed to create directory %s: %v", dir, err)
