@@ -1,7 +1,17 @@
-GO = go
+# GO = go
+# BUILD_DIR = bin
+# BUILD_BINARY = $(BUILD_DIR)/agent
+# PKG = ./...
+
+# For linux arm 7
+GO=go
+GOARCH=arm
+GOARM=7
+GOOS=linux
+VERSION=1.3.0
+LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
 BUILD_DIR = bin
 BUILD_BINARY = $(BUILD_DIR)/agent
-PKG = ./...
 
 all: deps lint test build
 
@@ -38,10 +48,16 @@ coverage-html:
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "[SUCCESS] Open coverage.html in a browser to view detailed coverage."
 
+# build:
+# 	@echo "[INFO] Building the project..."
+# 	@mkdir -p $(BUILD_DIR)
+# 	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
+# 	@echo "[SUCCESS] Build completed. Binary available at $(BUILD_BINARY)"
+
 build:
 	@echo "[INFO] Building the project..."
 	@mkdir -p $(BUILD_DIR)
-	$(GO) build -o $(BUILD_BINARY) ./cmd/agent
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) $(GO) build $(LDFLAGS) -o $(BUILD_BINARY) ./cmd/agent
 	@echo "[SUCCESS] Build completed. Binary available at $(BUILD_BINARY)"
 
 clean:

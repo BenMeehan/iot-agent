@@ -13,7 +13,7 @@ security:
 
 middlewares:
   authentication:
-    enabled: true                    
+    enabled: false                    
     topic: "iot-authentication"
     qos: 2
     retry_delay: 60s
@@ -68,6 +68,6 @@ services:
   update_service:
     topic: "iot-update"
     qos: 2
-    update_file_path: "updates"
-    state_file: "configs/update_state.json"
-    enabled: false
+    enabled: true
+    metadata_file: "updates-metadata.json"
+    acknowledgement_topic: "update-status"
