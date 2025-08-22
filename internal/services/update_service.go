@@ -188,8 +188,26 @@ func (u *UpdateService) Start() error {
 	return nil
 }
 
-// Stop
+// Stop gracefully shuts down the update service and unsubscribes from MQTT topics.
 func (u *UpdateService) Stop() error {
+	// Unsubscribe from acknowledgment mqtt topic
+	ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
+	token := u.MqttClient.Unsubscribe(ackTopic)
+	token.Wait()
+	if token.Error() != nil {
+		u.Logger.Error().Err(token.Error()).Msg("Failed to unsubscribe MQTT topic: " + ackTopic)
+		return fmt.Errorf("failed to unsubscribe MQTT topic: %s", ackTopic)
+	}
+
+	// Unsubscribe from device id mqtt topic
+	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
+	token = u.MqttClient.Unsubscribe(topic)
+	token.Wait()
+	if token.Error() != nil {
+		u.Logger.Error().Err(token.Error()).Msg("Failed to unsubscribe MQTT topic: " + topic)
+		return fmt.Errorf("failed to unsubscribe MQTT topic: %s", ackTopic)
+	}
+
 	return nil
 }
 
