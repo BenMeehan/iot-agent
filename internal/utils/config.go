@@ -46,11 +46,13 @@ type Config struct {
 		} `yaml:"metrics"`
 
 		Command struct {
-			Topic            string `yaml:"topic"`              // MQTT topic for command service
-			Enabled          bool   `yaml:"enabled"`            // Enable/disable command service
-			OutputSizeLimit  int    `yaml:"output_size_limit"`  // Maximum size of command output in bytes
-			MaxExecutionTime int    `yaml:"max_execution_time"` // Maximum execution time for commands (in seconds)
-			QOS              int    `yaml:"qos"`                // MQTT QoS level for command service messages
+			Topic             string `yaml:"topic"`               // MQTT topic for command service
+			Enabled           bool   `yaml:"enabled"`             // Enable/disable command service
+			OutputSizeLimit   int    `yaml:"output_size_limit"`   // Maximum size of command output in bytes
+			MaxExecutionTime  int    `yaml:"max_execution_time"`  // Maximum execution time for commands (in seconds)
+			QOS               int    `yaml:"qos"`                 // MQTT QoS level for command service messages
+			StatusEndpoint    string `yaml:"status_endpoint"`     // HTTP endpoint for sending command status updates
+			CommandsStateFile string `yaml:"commands_state_file"` // Path to the commands state file
 		} `yaml:"command"`
 
 		SSH struct {
