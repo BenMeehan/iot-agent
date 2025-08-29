@@ -163,8 +163,10 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddleware
 					config.Services.Command.QOS,
 					config.Services.Command.OutputSizeLimit,
 					config.Services.Command.MaxExecutionTime,
+					config.Services.Command.StatusEndpoint,
 					mqttMiddlewareChain,
 					deviceInfo,
+					config.Services.Command.CommandsStateFile,
 					sr.logger,
 				), nil
 			},
