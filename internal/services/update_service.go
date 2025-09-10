@@ -112,6 +112,7 @@ func (u *UpdateService) Start() error {
 	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
 	if isFileExists {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
+		fmt.Println("META DATA ::: ", metadataFileContent)
 		if err != nil {
 			return fmt.Errorf("error reading metadata file: %v", err)
 		}
@@ -121,9 +122,16 @@ func (u *UpdateService) Start() error {
 		}
 
 		u.updateMetadata = u.fileMetadataContent.Update
-		if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
-			return fmt.Errorf("error unmashal metadata content: %v", err)
+		fmt.Println("UPDATE DATA ::: ", u.updateMetadata, len(u.updateMetadata.ManifestData))
+		// Check if ManifestData is empty before unmarshaling
+		if len(u.updateMetadata.ManifestData) == 0 {
+			u.manifest = models.Manifest{}
+		} else {
+			if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
+				return fmt.Errorf("error unmashal metadata content: %v", err)
+			}
 		}
+
 		//u.state = constants.UpdateStateInstalling
 
 		prevState := u.fileMetadataContent.Update.Status

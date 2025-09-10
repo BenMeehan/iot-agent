@@ -81,6 +81,7 @@ type Config struct {
 			Enabled              bool   `yaml:"enabled"`               // Enable/disable update service
 			MetadataFile         string `yaml:"metadata_file"`         // Path to save downloaded update files
 			AcknowledgementTopic string `yaml:"acknowledgement_topic"` // Shared Acknowledgement MQTT topic for update status
+			AcknowledgementURL   string `yaml:"acknowledgement_url"`   // Acknowledgement URL endpoint
 		} `yaml:"update_service"`
 	} `yaml:"services"`
 

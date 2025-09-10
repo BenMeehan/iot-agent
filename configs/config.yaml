@@ -28,12 +28,12 @@ services:
     base_delay: 2s
     max_backoff: 60s
     response_timeout: 60s
-    enabled: true
+    enabled: false
   heartbeat:
     topic: "iot-heartbeat"
     interval: 10s
     qos: 1
-    enabled: true
+    enabled: false
   metrics:
     topic: "iot-metrics"
     metrics_config_file: "configs/metrics.json"
@@ -60,7 +60,7 @@ services:
     topic: "iot-location"
     qos: 1
     interval: 10s
-    sensor_based: true
+    sensor_based: false
     maps_api_key: ""
     gps_device_baud_rate: 9600
     gps_device_port: "/dev/ttyACM0"
@@ -71,3 +71,4 @@ services:
     enabled: true
     metadata_file: "updates-metadata.json"
     acknowledgement_topic: "update-status"
+    acknowledgement_url: "http://localhost:7000/update/ack"

@@ -1,11 +1,13 @@
 package http_utils
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func DownloadFileByPresignedURL(presignedURL string, outputPath string) error {
@@ -46,4 +48,36 @@ func DownloadFileByPresignedURL(presignedURL string, outputPath string) error {
 	}
 
 	return nil
+}
+
+func GetAcknowledgementResponse(url string, postBody string) (int, []byte, error) {
+	// Create new request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(postBody)))
+	if err != nil {
+		return 0, []byte{}, err
+	}
+
+	// Add JWT token here
+	// req.Header.Set("Authorization", "Bearer your_token_here")
+	req.Header.Set("Content-Type", "application/json")
+
+	// Create client with timeout
+	client := &http.Client{
+		Timeout: 15 * time.Second, // ⬅️ set timeout here
+	}
+
+	// Execute request
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, []byte{}, err
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, []byte{}, err
+	}
+
+	return resp.StatusCode, respBodyBytes, nil
 }

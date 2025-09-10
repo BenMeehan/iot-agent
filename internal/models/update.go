@@ -54,6 +54,11 @@ type Ack struct {
 	Error    string `json:"error"`
 }
 
+type AckResponse struct {
+	Status  string `json:"status"`
+	Message Ack    `json:"message"`
+}
+
 type Manifest struct {
 	OSUpdate string `json:"os_update"`
 	Updates  Update `json:"updates"`
