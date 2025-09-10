@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 type UpdateService struct {
 	SubTopic                       string
 	SharedAcknowledgementMqttTopic string
+	AcknowledgementURL             string
 	DeviceInfo                     identity.DeviceInfoInterface
 	QOS                            int
 	MqttClient                     mqtt.MQTTClient
@@ -50,16 +52,23 @@ type UpdateService struct {
 	metadataFile        string
 	fileMetadataContent models.PartitionMetadata
 	updateMetadata      models.UpdatesMetaData
+	updateMux           sync.Mutex
+	ackRequestChannel   chan *models.Ack // channel for sending ACK requests
+
+	// Internal state for managing service lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
-func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, deviceInfo identity.DeviceInfoInterface, qos int,
+func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, deviceInfo identity.DeviceInfoInterface, qos int,
 	mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger zerolog.Logger,
 	metadataFile string) *UpdateService {
 
 	return &UpdateService{
 		SubTopic:                       subTopic,
 		SharedAcknowledgementMqttTopic: sharedAcknowledgementMqttTopic,
+		AcknowledgementURL:             acknowledgementURL,
 		DeviceInfo:                     deviceInfo,
 		QOS:                            qos,
 		MqttClient:                     mqttClient,
@@ -82,6 +91,7 @@ func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, de
 // Start initiates the MQTT listener for update commands
 func (u *UpdateService) Start() error {
 	u.ackChannel = make(chan models.Ack)
+	u.ackRequestChannel = make(chan *models.Ack, 10) // buffered channel to accomodate http requests
 
 	// Check if system is linux
 	if runtime.GOOS != "linux" {
@@ -93,7 +103,12 @@ func (u *UpdateService) Start() error {
 		return fmt.Errorf("error verifying system partitions. update service can't be run in this system. error: %v", err)
 	}
 
-	// NEED TO RESUME FROM PREVIOUS UPDATE STATE
+	u.wg.Add(1)
+	go u.runAckHandler()
+
+	u.SubscribeMQTTEndpoint()
+
+	// Checking metadata file exists
 	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
 	if isFileExists {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
@@ -102,74 +117,44 @@ func (u *UpdateService) Start() error {
 		}
 
 		if err := json.Unmarshal([]byte(metadataFileContent), &u.fileMetadataContent); err != nil {
-			return fmt.Errorf("error unmashal metadata file: %v", err)
+			return fmt.Errorf("error unmashal metadata file while reading file: %v", err)
 		}
 
 		u.updateMetadata = u.fileMetadataContent.Update
 		if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
-			return fmt.Errorf("error unmashal metadata file: %v", err)
+			return fmt.Errorf("error unmashal metadata content: %v", err)
 		}
-		u.state = constants.UpdateStateInstalling
+		//u.state = constants.UpdateStateInstalling
 
 		prevState := u.fileMetadataContent.Update.Status
 
-		if prevState == string(constants.UpdateStateDownloading) || prevState == string(constants.UpdateStateFailure) || prevState == "" {
-			u.SubscribeMQTTEndpoint()
-		} else if prevState == string(constants.UpdateStateInstalling) {
-			u.SubscribeMQTTEndpoint()
+		if prevState == string(constants.UpdateStateDownloading) || prevState == string(constants.UpdateStateInstalling) || prevState == string(constants.UpdateStateVerifying) {
+			// u.SubscribeMQTTEndpoint()
 			u.UpdateProcssFlow()
 
-			// Send install acknowledgment data to ack channel
-			mqttPayload := &models.Ack{
+			// Send acknowledgment data
+			requestPayload := &models.Ack{
 				UpdateId: u.fileMetadataContent.Update.UpdateId,
 				DeviceId: u.DeviceInfo.GetDeviceID(),
-				Status:   u.fileMetadataContent.Update.Status,
+				Status:   prevState,
 			}
-			mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-			if err != nil {
-				u.failedExecution(err, "Failed to marshal mqtt payload")
-				return err
-			}
+			// u.handleAckMessages(requestPayload)
+			u.ackRequestChannel <- requestPayload
+
+			// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+			// if err != nil {
+			// 	u.failedExecution(err, "Failed to marshal mqtt payload")
+			// 	return err
+			// }
 
 			// sharedAckTopic := u.SharedAcknowledgementMqttTopic
 
-			token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-			token.Wait()
-			if token.Error() != nil {
-				u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-				return token.Error()
-			}
-		} else if prevState == string(constants.UpdateStateVerifying) {
-			u.SubscribeMQTTEndpoint()
-			u.UpdateProcssFlow()
-
-			u.state = constants.UpdateState(prevState)
-
-			// Send success acknowledgment data to ack channel
-			mqttPayload := &models.Ack{
-				UpdateId: u.fileMetadataContent.Update.UpdateId,
-				DeviceId: u.DeviceInfo.GetDeviceID(),
-				Status:   string(u.state),
-			}
-			mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-			if err != nil {
-				u.failedExecution(err, "Failed to marshal mqtt payload")
-				return err
-			}
-
-			sharedAckTopic := "agent-updates"
-
-			token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-			token.Wait()
-			if token.Error() != nil {
-				u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-				return token.Error()
-			} else {
-				u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
-			}
-
-		} else if prevState == string(constants.UpdateStateSuccess) {
-			u.SubscribeMQTTEndpoint()
+			// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
+			// token.Wait()
+			// if token.Error() != nil {
+			// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
+			// 	return token.Error()
+			// }
 		}
 	} else {
 		// If file exists and can't read because of permission issues
@@ -183,8 +168,10 @@ func (u *UpdateService) Start() error {
 		}
 
 		// New metadata file created and listen for mqtt
-		u.SubscribeMQTTEndpoint()
+		fmt.Println("LISTENING MQTT")
+		// u.SubscribeMQTTEndpoint()
 	}
+
 	return nil
 }
 
@@ -208,23 +195,41 @@ func (u *UpdateService) Stop() error {
 		return fmt.Errorf("failed to unsubscribe MQTT topic: %s", ackTopic)
 	}
 
+	u.Logger.Info().Msg("Closing ackRequestChannel")
+	close(u.ackRequestChannel)
+	u.Logger.Info().Msg("Closing ackChannel")
+	close(u.ackChannel)
+	u.Logger.Info().Msg("Waiting for WaitGroup")
+	u.wg.Wait()
+	u.Logger.Info().Msg("UpdateService stopped")
+
 	return nil
 }
 
 func (u *UpdateService) SubscribeMQTTEndpoint() {
 	// Subscribe for acknowledgment messages
-	ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
-	token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
-	token.Wait()
-	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + ackTopic)
-	} else {
-		u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
-	}
+	// ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
+	// token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
+	// token.Wait()
+	// if token.Error() != nil {
+	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + ackTopic)
+	// } else {
+	// 	u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
+	// }
 
 	// Subscribe for update messages
+	// if u.ctx != nil {
+	// 	u.Logger.Info().Msg("Update is alread running")
+	// 	return
+	// }
+	// u.ctx, u.cancel = context.WithCancel(context.Background())
+
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	token = u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
+	fmt.Println(topic)
+
+	// u.updateMux.Lock()
+	// defer u.updateMux.Unlock()
+	token := u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
 	token.Wait()
 	if token.Error() != nil {
 		u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + topic)
@@ -232,8 +237,8 @@ func (u *UpdateService) SubscribeMQTTEndpoint() {
 		u.Logger.Info().Str("topic", topic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", topic))
 	}
 
-	u.Logger.Info().Msg("Starting wait group")
-	u.wg.Wait()
+	// u.Logger.Info().Msg("Starting wait group")
+	// u.wg.Wait()
 }
 
 func (u *UpdateService) verifySystemPartition() error {
@@ -398,6 +403,12 @@ func contains(slice []string, item string) bool {
 
 // InitiateUpdate processes incoming MQTT update commands
 func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
+	if u.ctx != nil {
+		u.Logger.Info().Msg("Update is alread running")
+		return
+	}
+	u.ctx, u.cancel = context.WithCancel(context.Background())
+
 	// Parse UpdateCommandPayload
 	var payload models.UpdateCommandPayload
 
@@ -427,12 +438,12 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	if isFileExists && err == nil {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
 		if err != nil {
-			u.Logger.Error().Err(err).Msg("Error reading metadata file")
+			u.Logger.Error().Err(err).Msg("error reading metadata file")
 			return
 		}
 
 		if err := json.Unmarshal([]byte(metadataFileContent), &localMetadataFileContent); err != nil {
-			u.Logger.Error().Err(err).Msg("Error unmashal metadata file")
+			u.Logger.Error().Err(err).Msg("error unmashal metadata file while checking version")
 			return
 		}
 
@@ -440,16 +451,17 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 			oldVersion = localMetadataFileContent.Update.Version
 		}
 	}
-
+	fmt.Println("VERSION::", oldVersion, payload.UpdateVersion)
 	// Check if the version is new
 	isNewVersionUpdate, err := u.isNewVersion(oldVersion, payload.UpdateVersion)
+	fmt.Println(isNewVersionUpdate, err)
 	if err != nil {
-		u.failedExecution(err, "Error validating version")
+		u.failedExecution(err, "error validating version")
 		return
 	}
 
 	if !isNewVersionUpdate {
-		u.failedExecution(err, "Error validating version")
+		u.failedExecution(fmt.Errorf("version should be higher than old version"), fmt.Sprintf("%s less/equal to %s", oldVersion, payload.UpdateVersion))
 		return
 	}
 
@@ -460,32 +472,42 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	}
 
 	// send downloading mqtt message
-	mqttPayload := &models.Ack{
+	requestPayload := &models.Ack{
 		UpdateId: payload.UpdateId,
 		DeviceId: u.DeviceInfo.GetDeviceID(),
 		Status:   string(u.state),
 	}
-	mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-	if err != nil {
-		u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+
+	fmt.Println("SENT -> ", requestPayload)
+	u.UpdateProcssFlow() // Start the consumer goroutine first
+	u.Logger.Info().Interface("payload", requestPayload).Msg("Sending to ackRequestChannel")
+	select {
+	case u.ackRequestChannel <- requestPayload:
+		u.Logger.Info().Msg("Successfully sent to ackRequestChannel")
+	default:
+		u.Logger.Warn().Msg("ackRequestChannel is full or closed")
+		u.failedExecution(fmt.Errorf("channel send failed"), "ackRequestChannel is full or closed")
 		return
 	}
 
-	token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-	token.Wait()
-	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-		return
-	} else {
-		u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
-	}
+	// u.handleAckMessages(requestPayload)
 
-	u.UpdateProcssFlow()
+	// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
+	// token.Wait()
+	// if token.Error() != nil {
+	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
+	// 	return
+	// } else {
+	// 	u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
+	// }
+
+	// u.UpdateProcssFlow()
 }
+
 func (u *UpdateService) UpdateProcssFlow() {
 
 	retry := 1
-	sharedAckTopic := u.SharedAcknowledgementMqttTopic
+	// sharedAckTopic := u.SharedAcknowledgementMqttTopic
 	u.wg.Add(1)
 	// go routine for proceeding with next step
 	go func() {
@@ -502,7 +524,14 @@ func (u *UpdateService) UpdateProcssFlow() {
 				// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 				// }
 
-				if ack.Status == string(constants.UpdateStateDownloading) {
+				if ack.Error != "" {
+					// Do not retry if there is error
+					if !strings.Contains(ack.Error, "connection timeout error") {
+						u.failedExecution(fmt.Errorf("error from acknowledgement message"), ack.Error)
+						return
+					}
+				} else if ack.Status == string(constants.UpdateStateDownloading) {
+					fmt.Println("DOWNLOADING...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -568,25 +597,28 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// send installing mqtt message
-					mqttPayload := &models.Ack{
+					requestPayload := &models.Ack{
 						UpdateId: u.updateMetadata.UpdateId,
 						DeviceId: u.DeviceInfo.GetDeviceID(),
 						Status:   string(u.state),
 					}
-					mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-					if err != nil {
-						u.failedExecution(err, "failed to marshal mqtt payload")
-						return
-					}
+					// go u.handleAckMessages(requestPayload)
+					u.ackRequestChannel <- requestPayload
+					// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+					// if err != nil {
+					// 	u.failedExecution(err, "failed to marshal mqtt payload")
+					// 	return
+					// }
 
-					token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-					token.Wait()
-					if token.Error() != nil {
-						u.failedExecution(err, "failed to publish mqtt installing message")
-						return
-					}
+					// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+					// token.Wait()
+					// if token.Error() != nil {
+					// 	u.failedExecution(err, "failed to publish mqtt installing message")
+					// 	return
+					// }
 
 				} else if ack.Status == string(constants.UpdateStateInstalling) {
+					fmt.Println("INSTALL...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -619,27 +651,29 @@ func (u *UpdateService) UpdateProcssFlow() {
 						return
 					} else {
 						// send verifying mqtt message
-						mqttPayload := &models.Ack{
+						requestPayload := &models.Ack{
 							UpdateId: u.updateMetadata.UpdateId,
 							DeviceId: u.DeviceInfo.GetDeviceID(),
 							Status:   string(u.state),
 						}
-						mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-						if err != nil {
-							u.failedExecution(err, "failed to marshal mqtt payload")
-							return
-						}
+						// u.handleAckMessages(requestPayload)
+						u.ackRequestChannel <- requestPayload
+						// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+						// if err != nil {
+						// 	u.failedExecution(err, "failed to marshal mqtt payload")
+						// 	return
+						// }
 
-						token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-						token.Wait()
-						if token.Error() != nil {
-							u.failedExecution(err, "failed to publish mqtt installing message")
-							return
-						}
+						// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+						// token.Wait()
+						// if token.Error() != nil {
+						// 	u.failedExecution(err, "failed to publish mqtt installing message")
+						// 	return
+						// }
 					}
 
 				} else if ack.Status == string(constants.UpdateStateVerifying) {
-
+					fmt.Println("VERIFY...")
 					if u.manifest.OSUpdate != "" && u.activePartition.PARTUUID != u.fileMetadataContent.InActivePartition.PARTUUID {
 						u.failedExecution(fmt.Errorf("boot failed"), "failed to switch partition")
 						return
@@ -651,25 +685,28 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// send success mqtt message
-					mqttPayload := &models.Ack{
+					requestPayload := &models.Ack{
 						UpdateId: u.updateMetadata.UpdateId,
 						DeviceId: u.DeviceInfo.GetDeviceID(),
 						Status:   string(u.state),
 					}
-					mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-					if err != nil {
-						u.failedExecution(err, "failed to marshal mqtt payload")
-						return
-					}
+					// u.handleAckMessages(requestPayload)
+					u.ackRequestChannel <- requestPayload
+					// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+					// if err != nil {
+					// 	u.failedExecution(err, "failed to marshal mqtt payload")
+					// 	return
+					// }
 
-					token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-					token.Wait()
-					if token.Error() != nil {
-						u.failedExecution(token.Error(), "failed to publish mqtt message")
-						return
-					}
+					// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+					// token.Wait()
+					// if token.Error() != nil {
+					// 	u.failedExecution(token.Error(), "failed to publish mqtt message")
+					// 	return
+					// }
 
 				} else if ack.Status == string(constants.UpdateStateSuccess) {
+					fmt.Println("SUCCESS...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -678,6 +715,13 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 					// Update the state to idle for next update
 					u.setState(constants.UpdateStateIdle)
+
+					if u.ctx != nil {
+						u.cancel()
+						u.ctx = nil
+						u.cancel = nil
+					}
+
 					return
 				}
 
@@ -685,28 +729,40 @@ func (u *UpdateService) UpdateProcssFlow() {
 				retry++
 				time.Sleep(5 * time.Second)
 
-				mqttPayload := &models.Ack{
+				requestPayload := &models.Ack{
 					UpdateId: u.updateMetadata.UpdateId,
 					DeviceId: u.DeviceInfo.GetDeviceID(),
 					Status:   string(u.state),
 				}
-				mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-				if err != nil {
-					u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+				u.Logger.Info().Interface("payload", requestPayload).Msg("Sending retry ACK to ackRequestChannel")
+				select {
+				case u.ackRequestChannel <- requestPayload:
+					u.Logger.Info().Msg("Successfully sent retry ACK")
+				default:
+					u.Logger.Warn().Msg("ackRequestChannel is full or closed")
+					u.failedExecution(fmt.Errorf("channel send failed"), "ackRequestChannel is full or closed")
 					return
 				}
+				// u.handleAckMessages(requestPayload)
+				// u.ackRequestChannel <- requestPayload
 
-				token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-				token.Wait()
-				if token.Error() != nil {
-					u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-					return
-				} else {
-					u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
-				}
+				// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+				// if err != nil {
+				// 	u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
+				// 	return
+				// }
+
+				// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
+				// token.Wait()
+				// if token.Error() != nil {
+				// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
+				// 	return
+				// } else {
+				// 	u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
+				// }
 
 				if retry > 5 {
-					u.failedExecution(fmt.Errorf("failed to get mqtt acklowledgment message"), "max retries reached")
+					u.failedExecution(fmt.Errorf("retried 5 times for response"), "max retries reached")
 					return
 				}
 			}
@@ -714,17 +770,55 @@ func (u *UpdateService) UpdateProcssFlow() {
 	}()
 }
 
-// handleAckMessages processes incoming Acknowledgment MQTT messages
-func (u *UpdateService) handleAckMessages(client MQTT.Client, msg MQTT.Message) {
-	// Parse Acknowledgment message
-	var payload models.Ack
-	if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
-		u.Logger.Error().Err(err).Msg("Failed to parse ack message payload")
-		return
+// handleAckMessages processes incoming Acknowledgment message
+func (u *UpdateService) runAckHandler() {
+	u.Logger.Info().Msg("runAckHandler started")
+	defer u.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			u.Logger.Error().Interface("panic", r).Msg("Panic in runAckHandler")
+		}
+	}()
+	for requestPayload := range u.ackRequestChannel {
+		u.Logger.Info().Interface("payload", requestPayload).Msg("Received ACK request")
+		u.handleAckMessages(requestPayload)
+	}
+	u.Logger.Info().Msg("runAckHandler exiting")
+}
+
+// handleAckMessages processes incoming Acknowledgment message
+func (u *UpdateService) handleAckMessages(requestPayload *models.Ack) {
+	var ackResponse models.AckResponse
+
+	requestPayloadBytes, err := json.Marshal(&requestPayload)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("failed to marshal request payload")
+		ackResponse.Message.Error = err.Error()
 	}
 
-	// Send acknowledgment to channel
-	u.ackChannel <- payload
+	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.AcknowledgementURL, string(requestPayloadBytes))
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("failed to get response")
+		ackResponse.Message.Error = err.Error()
+	}
+
+	fmt.Println("-> ", string(dataBytes))
+	fmt.Println(status_code)
+
+	if status_code == 0 {
+		ackResponse.Message.Error = fmt.Sprintf("%s; connection timeout error", err.Error())
+	} else if status_code == 200 {
+		if err := json.Unmarshal([]byte(dataBytes), &ackResponse); err != nil {
+			u.Logger.Error().Err(err).Msg("failed to parse acknowledgement message")
+			ackResponse.Message.Error = err.Error()
+		}
+	} else {
+		ackResponse.Message.Error = string(dataBytes)
+	}
+
+	fmt.Println("ACK::", ackResponse.Message)
+	u.ackChannel <- ackResponse.Message
+	fmt.Println("ACK SENT::")
 }
 
 // setState sets the current update state and saves it to disk
@@ -925,36 +1019,47 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 
 // failedExecution will update the state, metadata file and send the error mqtt message
 func (u *UpdateService) failedExecution(err error, errorMessage string) {
+	fmt.Println("STATE:: ", u.state)
 	u.setState(constants.UpdateStateFailure)
+	fmt.Println("STATE 1:: ", u.state)
 	u.updateMetadata.Status = string(u.state)
 	u.updateMetadata.ErrorLog = fmt.Sprintf("%s: %v; ", errorMessage, err)
 	u.fileMetadataContent.Update = u.updateMetadata
 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
 	// send mqtt error message
-	mqttPayload := &models.Ack{
-		UpdateId: u.updateMetadata.UpdateId,
-		DeviceId: u.DeviceInfo.GetDeviceID(),
-		Status:   string(u.state),
-		Error:    fmt.Sprintf("%s: %v", errorMessage, err),
-	}
-	mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-	if err != nil {
-		u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to marshal mqtt payload: %v;", err)
-		u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-		return
-	}
+	// requestPayload := &models.Ack{
+	// 	UpdateId: u.updateMetadata.UpdateId,
+	// 	DeviceId: u.DeviceInfo.GetDeviceID(),
+	// 	Status:   string(u.state),
+	// 	Error:    fmt.Sprintf("%s: %v", errorMessage, err),
+	// }
+	// err = u.handleAckMessages(requestPayload)
+	// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
+	// if err != nil {
+	// 	u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to marshal mqtt payload: %v;", err)
+	// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+	// 	return
+	// }
 
-	token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-	token.Wait()
-	if token.Error() != nil {
-		u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to publish mqtt message: %v;", err)
-		u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-		return
-	}
+	// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
+	// token.Wait()
+	// if token.Error() != nil {
+	// 	u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to publish mqtt message: %v;", err)
+	// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+	// 	return
+	// }
 
 	u.Logger.Error().Err(err).Msg(u.updateMetadata.ErrorLog)
 	u.setState(constants.UpdateStateIdle)
+
+	fmt.Println("CUR STATE:: ", u.state)
+
+	if u.ctx != nil {
+		u.cancel()
+		u.ctx = nil
+		u.cancel = nil
+	}
 }
 
 // deleteExtractedFile will update system files in device
