@@ -78,7 +78,7 @@ func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, ac
 
 		state: constants.UpdateStateIdle, // Assuming an initial state
 		validTransitions: map[constants.UpdateState][]constants.UpdateState{
-			constants.UpdateStateIdle:        {constants.UpdateStateDownloading, constants.UpdateStateFailure},
+			constants.UpdateStateIdle:        {constants.UpdateStateDownloading, constants.UpdateStateInstalling, constants.UpdateStateVerifying, constants.UpdateStateFailure},
 			constants.UpdateStateDownloading: {constants.UpdateStateInstalling, constants.UpdateStateFailure},
 			constants.UpdateStateInstalling:  {constants.UpdateStateVerifying, constants.UpdateStateFailure},
 			constants.UpdateStateVerifying:   {constants.UpdateStateSuccess, constants.UpdateStateFailure},
@@ -138,8 +138,15 @@ func (u *UpdateService) Start() error {
 
 		if prevState == string(constants.UpdateStateDownloading) || prevState == string(constants.UpdateStateInstalling) || prevState == string(constants.UpdateStateVerifying) {
 			// u.SubscribeMQTTEndpoint()
-			u.UpdateProcssFlow()
+			if prevState == string(constants.UpdateStateDownloading) {
+				u.setState(constants.UpdateStateDownloading)
+			} else if prevState == string(constants.UpdateStateInstalling) {
+				u.setState(constants.UpdateStateInstalling)
+			} else if prevState == string(constants.UpdateStateVerifying) {
+				u.setState(constants.UpdateStateVerifying)
+			}
 
+			u.UpdateProcssFlow()
 			// Send acknowledgment data
 			requestPayload := &models.Ack{
 				UpdateId: u.fileMetadataContent.Update.UpdateId,
@@ -465,10 +472,18 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 	fmt.Println(isNewVersionUpdate, err)
 	if err != nil {
 		u.failedExecution(err, "error validating version")
+
+		// requestPayload := &models.Ack{
+		// 	UpdateId: u.updateMetadata.UpdateId,
+		// 	DeviceId: u.DeviceInfo.GetDeviceID(),
+		// 	Status:   string(u.state),
+		// 	Error:    fmt.Sprintf("%s: %v;", "error validating version", err),
+		// }
+		// u.ackRequestChannel <- requestPayload
 		return
 	}
 
-	if !isNewVersionUpdate {
+	if !isNewVersionUpdate && localMetadataFileContent.Update.Status != string(constants.UpdateStateFailure) {
 		u.failedExecution(fmt.Errorf("version should be higher than old version"), fmt.Sprintf("%s less/equal to %s", oldVersion, payload.UpdateVersion))
 		return
 	}
@@ -533,9 +548,9 @@ func (u *UpdateService) UpdateProcssFlow() {
 				// }
 
 				if ack.Error != "" {
-					// Do not retry if there is error
+					// Do not retry if there is error from cloud
 					if !strings.Contains(ack.Error, "connection timeout error") {
-						u.failedExecution(fmt.Errorf("error from acknowledgement message"), ack.Error)
+						u.failedCloudResponse(fmt.Errorf("error: server down"), ack.Error)
 						return
 					}
 				} else if ack.Status == string(constants.UpdateStateDownloading) {
@@ -817,16 +832,19 @@ func (u *UpdateService) handleAckMessages(requestPayload *models.Ack) {
 		ackResponse.Message.Error = fmt.Sprintf("%s; connection timeout error", err.Error())
 	} else if status_code == 200 {
 		if err := json.Unmarshal([]byte(dataBytes), &ackResponse); err != nil {
-			u.Logger.Error().Err(err).Msg("failed to parse acknowledgement message")
+			u.Logger.Error().Err(err).Msg("failed to parse success acknowledgement message")
 			ackResponse.Message.Error = err.Error()
 		}
 	} else {
-		ackResponse.Message.Error = string(dataBytes)
+		if err := json.Unmarshal([]byte(dataBytes), &ackResponse); err != nil {
+			u.Logger.Error().Err(err).Msg("failed to parse failure acknowledgement message")
+			ackResponse.Message.Error = err.Error()
+		} else {
+			ackResponse.Message.Error = fmt.Sprintf("%s; %s", ackResponse.Status, ackResponse.Message.Error)
+		}
 	}
 
-	fmt.Println("ACK::", ackResponse.Message)
 	u.ackChannel <- ackResponse.Message
-	fmt.Println("ACK SENT::")
 }
 
 // setState sets the current update state and saves it to disk
@@ -1031,7 +1049,48 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 	u.setState(constants.UpdateStateFailure)
 	fmt.Println("STATE 1:: ", u.state)
 	u.updateMetadata.Status = string(u.state)
-	u.updateMetadata.ErrorLog = fmt.Sprintf("%s: %v; ", errorMessage, err)
+	u.updateMetadata.ErrorLog = fmt.Sprintf("%v: %s", err, errorMessage)
+	u.fileMetadataContent.Update = u.updateMetadata
+	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
+
+	// update cloud with acknowledgement message on failure
+	requestPayload := &models.Ack{
+		UpdateId: u.updateMetadata.UpdateId,
+		DeviceId: u.DeviceInfo.GetDeviceID(),
+		Status:   string(u.state),
+		Error:    u.updateMetadata.ErrorLog,
+	}
+
+	var ackResponse models.AckResponse
+	requestPayloadBytes, err := json.Marshal(&requestPayload)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("failed to marshal request payload")
+		ackResponse.Message.Error = err.Error()
+	}
+
+	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.AcknowledgementURL, string(requestPayloadBytes))
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("failed to get response")
+		ackResponse.Message.Error = err.Error()
+	}
+
+	if status_code == 0 {
+		ackResponse.Message.Error = fmt.Sprintf("%s; connection timeout error", err.Error())
+	} else if status_code == 200 {
+		if err := json.Unmarshal([]byte(dataBytes), &ackResponse); err != nil {
+			u.Logger.Error().Err(err).Msg("failed to parse success acknowledgement message")
+			ackResponse.Message.Error = err.Error()
+		}
+	} else {
+		if err := json.Unmarshal([]byte(dataBytes), &ackResponse); err != nil {
+			u.Logger.Error().Err(err).Msg("failed to parse failure acknowledgement message")
+			ackResponse.Message.Error = fmt.Sprintf("%s; %s", err.Error(), u.updateMetadata.ErrorLog)
+		} else {
+			ackResponse.Message.Error = fmt.Sprintf("%s; %s", ackResponse.Status, ackResponse.Message.Error)
+		}
+	}
+
+	u.updateMetadata.ErrorLog = ackResponse.Message.Error
 	u.fileMetadataContent.Update = u.updateMetadata
 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
@@ -1057,6 +1116,28 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 	// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 	// 	return
 	// }
+
+	u.Logger.Error().Err(err).Msg(u.updateMetadata.ErrorLog)
+	u.setState(constants.UpdateStateIdle)
+
+	fmt.Println("CUR STATE:: ", u.state)
+
+	if u.ctx != nil {
+		u.cancel()
+		u.ctx = nil
+		u.cancel = nil
+	}
+}
+
+// failedCloudResponse will update the log in device
+func (u *UpdateService) failedCloudResponse(err error, errorMessage string) {
+	fmt.Println("STATE:: ", u.state)
+	u.setState(constants.UpdateStateFailure)
+	fmt.Println("STATE 1:: ", u.state)
+	u.updateMetadata.Status = string(u.state)
+	u.updateMetadata.ErrorLog = fmt.Sprintf("%v; %s", err, errorMessage)
+	u.fileMetadataContent.Update = u.updateMetadata
+	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
 	u.Logger.Error().Err(err).Msg(u.updateMetadata.ErrorLog)
 	u.setState(constants.UpdateStateIdle)
