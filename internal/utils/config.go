@@ -78,11 +78,12 @@ type Config struct {
 		} `yaml:"location_service"`
 
 		Update struct {
-			Topic          string `yaml:"topic"`            // MQTT topic for update service
-			QOS            int    `yaml:"qos"`              // MQTT QoS level for update messages
-			UpdateFilePath string `yaml:"update_file_path"` // Path to save downloaded update files
-			StateFile      string `yaml:"state_file"`       // Path to store the update state
-			Enabled        bool   `yaml:"enabled"`          // Enable/disable update service
+			Topic                string `yaml:"topic"`                 // MQTT topic for update service
+			QOS                  int    `yaml:"qos"`                   // MQTT QoS level for update messages
+			Enabled              bool   `yaml:"enabled"`               // Enable/disable update service
+			MetadataFile         string `yaml:"metadata_file"`         // Path to save downloaded update files
+			AcknowledgementTopic string `yaml:"acknowledgement_topic"` // Shared Acknowledgement MQTT topic for update status
+			AcknowledgementURL   string `yaml:"acknowledgement_url"`   // Acknowledgement URL endpoint
 		} `yaml:"update_service"`
 	} `yaml:"services"`
 

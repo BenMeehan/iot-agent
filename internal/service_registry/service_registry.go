@@ -222,13 +222,14 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddleware
 			constructor: func() (Service, error) {
 				return services.NewUpdateService(
 					config.Services.Update.Topic,
+					config.Services.Update.AcknowledgementTopic,
+					config.Services.Update.AcknowledgementURL,
 					deviceInfo,
 					config.Services.Update.QOS,
 					mqttMiddlewareChain,
 					sr.fileClient,
 					sr.logger,
-					config.Services.Update.StateFile,
-					config.Services.Update.UpdateFilePath,
+					config.Services.Update.MetadataFile,
 				), nil
 			},
 		},
