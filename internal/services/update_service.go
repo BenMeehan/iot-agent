@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -22,11 +23,11 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
+	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/pkg/file"
 	http_utils "github.com/benmeehan/iot-agent/pkg/httpUtils"
 	"github.com/benmeehan/iot-agent/pkg/identity"
-	"github.com/benmeehan/iot-agent/pkg/mqtt"
 )
 
 // UpdateService struct with FSM
@@ -36,7 +37,7 @@ type UpdateService struct {
 	AcknowledgementURL             string
 	DeviceInfo                     identity.DeviceInfoInterface
 	QOS                            int
-	MqttClient                     mqtt.MQTTClient
+	MqttClient                     mqtt_middleware.MQTTMiddleware
 	Logger                         zerolog.Logger
 	FileClient                     file.FileOperations
 
@@ -62,7 +63,7 @@ type UpdateService struct {
 
 // NewUpdateService creates and returns a new instance of UpdateService.
 func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, deviceInfo identity.DeviceInfoInterface, qos int,
-	mqttClient mqtt.MQTTClient, fileClient file.FileOperations, logger zerolog.Logger,
+	mqttClient mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
 	metadataFile string) *UpdateService {
 
 	return &UpdateService{
@@ -112,7 +113,6 @@ func (u *UpdateService) Start() error {
 	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
 	if isFileExists {
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
-		fmt.Println("META DATA ::: ", metadataFileContent)
 		if err != nil {
 			return fmt.Errorf("error reading metadata file: %v", err)
 		}
@@ -122,7 +122,6 @@ func (u *UpdateService) Start() error {
 		}
 
 		u.updateMetadata = u.fileMetadataContent.Update
-		fmt.Println("UPDATE DATA ::: ", u.updateMetadata, len(u.updateMetadata.ManifestData))
 		// Check if ManifestData is empty before unmarshaling
 		if len(u.updateMetadata.ManifestData) == 0 {
 			u.manifest = models.Manifest{}
@@ -155,21 +154,6 @@ func (u *UpdateService) Start() error {
 			}
 			// u.handleAckMessages(requestPayload)
 			u.ackRequestChannel <- requestPayload
-
-			// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-			// if err != nil {
-			// 	u.failedExecution(err, "Failed to marshal mqtt payload")
-			// 	return err
-			// }
-
-			// sharedAckTopic := u.SharedAcknowledgementMqttTopic
-
-			// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-			// token.Wait()
-			// if token.Error() != nil {
-			// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-			// 	return token.Error()
-			// }
 		}
 	} else {
 		// If file exists and can't read because of permission issues
@@ -181,10 +165,6 @@ func (u *UpdateService) Start() error {
 		if err := u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent); err != nil {
 			return fmt.Errorf("unable to write metadata file: %v", err)
 		}
-
-		// New metadata file created and listen for mqtt
-		fmt.Println("LISTENING MQTT")
-		// u.SubscribeMQTTEndpoint()
 	}
 
 	return nil
@@ -194,27 +174,23 @@ func (u *UpdateService) Start() error {
 func (u *UpdateService) Stop() error {
 	// Unsubscribe from acknowledgment mqtt topic
 	ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
-	token := u.MqttClient.Unsubscribe(ackTopic)
-	token.Wait()
-	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to unsubscribe MQTT topic: " + ackTopic)
+	err := u.MqttClient.Unsubscribe(ackTopic)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to unsubscribe MQTT topic: " + ackTopic)
 		return fmt.Errorf("failed to unsubscribe MQTT topic: %s", ackTopic)
 	}
 
 	// Unsubscribe from device id mqtt topic
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	token = u.MqttClient.Unsubscribe(topic)
-	token.Wait()
-	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to unsubscribe MQTT topic: " + topic)
+	err = u.MqttClient.Unsubscribe(topic)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to unsubscribe MQTT topic: " + topic)
 		return fmt.Errorf("failed to unsubscribe MQTT topic: %s", ackTopic)
 	}
 
-	u.Logger.Info().Msg("Closing ackRequestChannel")
+	u.Logger.Info().Msg("Closing ackRequestChannel, ackChannel, WaitGroup")
 	close(u.ackRequestChannel)
-	u.Logger.Info().Msg("Closing ackChannel")
 	close(u.ackChannel)
-	u.Logger.Info().Msg("Waiting for WaitGroup")
 	u.wg.Wait()
 	u.Logger.Info().Msg("UpdateService stopped")
 
@@ -222,38 +198,14 @@ func (u *UpdateService) Stop() error {
 }
 
 func (u *UpdateService) SubscribeMQTTEndpoint() {
-	// Subscribe for acknowledgment messages
-	// ackTopic := "ack" + "/" + u.DeviceInfo.GetDeviceID()
-	// token := u.MqttClient.Subscribe(ackTopic, byte(u.QOS), u.handleAckMessages)
-	// token.Wait()
-	// if token.Error() != nil {
-	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + ackTopic)
-	// } else {
-	// 	u.Logger.Info().Str("topic", ackTopic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", ackTopic))
-	// }
-
-	// Subscribe for update messages
-	// if u.ctx != nil {
-	// 	u.Logger.Info().Msg("Update is alread running")
-	// 	return
-	// }
-	// u.ctx, u.cancel = context.WithCancel(context.Background())
-
 	topic := u.SubTopic + "/" + u.DeviceInfo.GetDeviceID()
-	fmt.Println(topic)
 
-	// u.updateMux.Lock()
-	// defer u.updateMux.Unlock()
-	token := u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
-	token.Wait()
-	if token.Error() != nil {
-		u.Logger.Error().Err(token.Error()).Msg("Failed to subscribe MQTT topic: " + topic)
+	err := u.MqttClient.Subscribe(topic, byte(u.QOS), u.InitiateUpdate)
+	if err != nil {
+		u.Logger.Error().Err(err).Msg("Failed to subscribe MQTT topic: " + topic)
 	} else {
 		u.Logger.Info().Str("topic", topic).Msg(fmt.Sprintf("Subscribed MQTT topic: %s", topic))
 	}
-
-	// u.Logger.Info().Msg("Starting wait group")
-	// u.wg.Wait()
 }
 
 func (u *UpdateService) verifySystemPartition() error {
@@ -466,20 +418,11 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 			oldVersion = localMetadataFileContent.Update.Version
 		}
 	}
-	fmt.Println("VERSION::", oldVersion, payload.UpdateVersion)
+
 	// Check if the version is new
 	isNewVersionUpdate, err := u.isNewVersion(oldVersion, payload.UpdateVersion)
-	fmt.Println(isNewVersionUpdate, err)
 	if err != nil {
 		u.failedExecution(err, "error validating version")
-
-		// requestPayload := &models.Ack{
-		// 	UpdateId: u.updateMetadata.UpdateId,
-		// 	DeviceId: u.DeviceInfo.GetDeviceID(),
-		// 	Status:   string(u.state),
-		// 	Error:    fmt.Sprintf("%s: %v;", "error validating version", err),
-		// }
-		// u.ackRequestChannel <- requestPayload
 		return
 	}
 
@@ -501,30 +444,16 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 		Status:   string(u.state),
 	}
 
-	fmt.Println("SENT -> ", requestPayload)
 	u.UpdateProcssFlow() // Start the consumer goroutine first
-	u.Logger.Info().Interface("payload", requestPayload).Msg("Sending to ackRequestChannel")
+	// u.Logger.Info().Interface("payload", requestPayload).Msg("Sending to ackRequestChannel")
 	select {
 	case u.ackRequestChannel <- requestPayload:
-		u.Logger.Info().Msg("Successfully sent to ackRequestChannel")
+		// u.Logger.Info().Msg("Successfully sent to ackRequestChannel")
 	default:
 		u.Logger.Warn().Msg("ackRequestChannel is full or closed")
 		u.failedExecution(fmt.Errorf("channel send failed"), "ackRequestChannel is full or closed")
 		return
 	}
-
-	// u.handleAckMessages(requestPayload)
-
-	// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-	// token.Wait()
-	// if token.Error() != nil {
-	// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-	// 	return
-	// } else {
-	// 	u.Logger.Info().Str("status", "success").Msg("Published to " + u.SharedAcknowledgementMqttTopic)
-	// }
-
-	// u.UpdateProcssFlow()
 }
 
 func (u *UpdateService) UpdateProcssFlow() {
@@ -539,14 +468,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 		for {
 			select {
 			case ack := <-u.ackChannel:
-				// if !ok {
-				// 	u.setState(constants.UpdateStateFailure)
-				// 	u.updateMetadata.Status = string(u.state)
-				// 	u.updateMetadata.ErrorLog = "Failed to get acklowledgment data from channel"
-				// 	u.fileMetadataContent.Update = u.updateMetadata
-				// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-				// }
-
 				if ack.Error != "" {
 					// Do not retry if there is error from cloud
 					if !strings.Contains(ack.Error, "connection timeout error") {
@@ -554,7 +475,6 @@ func (u *UpdateService) UpdateProcssFlow() {
 						return
 					}
 				} else if ack.Status == string(constants.UpdateStateDownloading) {
-					fmt.Println("DOWNLOADING...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -625,23 +545,8 @@ func (u *UpdateService) UpdateProcssFlow() {
 						DeviceId: u.DeviceInfo.GetDeviceID(),
 						Status:   string(u.state),
 					}
-					// go u.handleAckMessages(requestPayload)
 					u.ackRequestChannel <- requestPayload
-					// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-					// if err != nil {
-					// 	u.failedExecution(err, "failed to marshal mqtt payload")
-					// 	return
-					// }
-
-					// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-					// token.Wait()
-					// if token.Error() != nil {
-					// 	u.failedExecution(err, "failed to publish mqtt installing message")
-					// 	return
-					// }
-
 				} else if ack.Status == string(constants.UpdateStateInstalling) {
-					fmt.Println("INSTALL...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -679,24 +584,11 @@ func (u *UpdateService) UpdateProcssFlow() {
 							DeviceId: u.DeviceInfo.GetDeviceID(),
 							Status:   string(u.state),
 						}
-						// u.handleAckMessages(requestPayload)
-						u.ackRequestChannel <- requestPayload
-						// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-						// if err != nil {
-						// 	u.failedExecution(err, "failed to marshal mqtt payload")
-						// 	return
-						// }
 
-						// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-						// token.Wait()
-						// if token.Error() != nil {
-						// 	u.failedExecution(err, "failed to publish mqtt installing message")
-						// 	return
-						// }
+						u.ackRequestChannel <- requestPayload
 					}
 
 				} else if ack.Status == string(constants.UpdateStateVerifying) {
-					fmt.Println("VERIFY...")
 					if u.manifest.OSUpdate != "" && u.activePartition.PARTUUID != u.fileMetadataContent.InActivePartition.PARTUUID {
 						u.failedExecution(fmt.Errorf("boot failed"), "failed to switch partition")
 						return
@@ -713,23 +605,9 @@ func (u *UpdateService) UpdateProcssFlow() {
 						DeviceId: u.DeviceInfo.GetDeviceID(),
 						Status:   string(u.state),
 					}
-					// u.handleAckMessages(requestPayload)
+
 					u.ackRequestChannel <- requestPayload
-					// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-					// if err != nil {
-					// 	u.failedExecution(err, "failed to marshal mqtt payload")
-					// 	return
-					// }
-
-					// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-					// token.Wait()
-					// if token.Error() != nil {
-					// 	u.failedExecution(token.Error(), "failed to publish mqtt message")
-					// 	return
-					// }
-
 				} else if ack.Status == string(constants.UpdateStateSuccess) {
-					fmt.Println("SUCCESS...")
 					retry = 0
 
 					u.updateMetadata.Status = string(u.state)
@@ -757,32 +635,15 @@ func (u *UpdateService) UpdateProcssFlow() {
 					DeviceId: u.DeviceInfo.GetDeviceID(),
 					Status:   string(u.state),
 				}
-				u.Logger.Info().Interface("payload", requestPayload).Msg("Sending retry ACK to ackRequestChannel")
+				// u.Logger.Info().Interface("payload", requestPayload).Msg("Sending retry ACK to ackRequestChannel")
 				select {
 				case u.ackRequestChannel <- requestPayload:
-					u.Logger.Info().Msg("Successfully sent retry ACK")
+					// u.Logger.Info().Msg("Successfully sent retry ACK")
 				default:
 					u.Logger.Warn().Msg("ackRequestChannel is full or closed")
 					u.failedExecution(fmt.Errorf("channel send failed"), "ackRequestChannel is full or closed")
 					return
 				}
-				// u.handleAckMessages(requestPayload)
-				// u.ackRequestChannel <- requestPayload
-
-				// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-				// if err != nil {
-				// 	u.Logger.Error().Err(err).Msg("Failed to marshal mqtt payload")
-				// 	return
-				// }
-
-				// token := u.MqttClient.Publish(sharedAckTopic, byte(2), false, mqttPayloadBytes)
-				// token.Wait()
-				// if token.Error() != nil {
-				// 	u.Logger.Error().Err(token.Error()).Msg("Failed to publish for download message")
-				// 	return
-				// } else {
-				// 	u.Logger.Info().Str("status", "success").Msg("Published to " + sharedAckTopic)
-				// }
 
 				if retry > 5 {
 					u.failedExecution(fmt.Errorf("retried 5 times for response"), "max retries reached")
@@ -803,10 +664,9 @@ func (u *UpdateService) runAckHandler() {
 		}
 	}()
 	for requestPayload := range u.ackRequestChannel {
-		u.Logger.Info().Interface("payload", requestPayload).Msg("Received ACK request")
+		// u.Logger.Info().Interface("payload", requestPayload).Msg("Received ACK request")
 		u.handleAckMessages(requestPayload)
 	}
-	u.Logger.Info().Msg("runAckHandler exiting")
 }
 
 // handleAckMessages processes incoming Acknowledgment message
@@ -824,9 +684,6 @@ func (u *UpdateService) handleAckMessages(requestPayload *models.Ack) {
 		u.Logger.Error().Err(err).Msg("failed to get response")
 		ackResponse.Message.Error = err.Error()
 	}
-
-	fmt.Println("-> ", string(dataBytes))
-	fmt.Println(status_code)
 
 	if status_code == 0 {
 		ackResponse.Message.Error = fmt.Sprintf("%s; connection timeout error", err.Error())
@@ -860,11 +717,6 @@ func (u *UpdateService) setState(newState constants.UpdateState) error {
 	}
 
 	u.state = newState
-	// stateData := struct{ State constants.UpdateState }{newState}
-	// if err := u.FileClient.WriteJsonFile(u.StateFile, stateData); err != nil {
-	// 	u.Logger.Error().Err(err).Msg("Failed to persist state")
-	// 	return err
-	// }
 
 	u.Logger.Info().Str("state", string(newState)).Msg("Update state updated")
 	return nil
@@ -945,7 +797,44 @@ func (u *UpdateService) installUpdates() bool {
 
 	// OS Update
 	if u.manifest.OSUpdate != "" {
-		_, err := u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + u.manifest.OSUpdate)
+		// Check if update file size is less than inactive partition size
+		ext := filepath.Ext(u.fileMetadataContent.Update.FileName)
+		updateFile := strings.TrimSuffix(u.fileMetadataContent.Update.FileName, ext)
+		updateFilePath := u.dataPartition.MountPoint + "/updates/" + updateFile
+		getUpdatefileSizeCmdStr := fmt.Sprintf("du -hb %s | awk '{print $1/1024/1024}'", updateFilePath)
+		getUpdatefileSizeCmd := exec.Command("sh", "-c", getUpdatefileSizeCmdStr)
+		updatefileSizeStr, err := executeCommandAndGetOutput(getUpdatefileSizeCmd)
+		if err != nil {
+			u.failedExecution(err, "failed to get update file size")
+			return false
+		}
+
+		getInactivePartitionSizeCmdStr := fmt.Sprintf("blockdev --getsize64 %s | awk '{print $1/1024/1024}'", u.fileMetadataContent.InActivePartition.Device)
+		getInactivePartitionSizeCmd := exec.Command("sh", "-c", getInactivePartitionSizeCmdStr)
+		inactivePartitionSizeStr, err := executeCommandAndGetOutput(getInactivePartitionSizeCmd)
+		if err != nil {
+			u.failedExecution(err, "failed to get inactive partition size")
+			return false
+		}
+
+		updatefileSizeInt, err := strconv.ParseFloat(strings.TrimSpace(updatefileSizeStr), 32)
+		if err != nil {
+			u.failedExecution(err, "failed to parse update file size")
+			return false
+		}
+
+		inactivePartitionSizeInt, err := strconv.ParseFloat(strings.TrimSpace(inactivePartitionSizeStr), 32)
+		if err != nil {
+			u.failedExecution(err, "failed to parse inactive partition size")
+			return false
+		}
+
+		if updatefileSizeInt > inactivePartitionSizeInt {
+			u.failedExecution(fmt.Errorf("update file size bigger than partition size"), fmt.Sprintf("update file %s should be less than %fMB", updateFile, strings.TrimSpace(inactivePartitionSizeStr)))
+			return false
+		}
+
+		_, err = u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + u.manifest.OSUpdate)
 		if err != nil {
 			u.failedExecution(err, "error installing os update")
 			return false
@@ -1025,7 +914,7 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 		return false, fmt.Errorf("findmnt command not found")
 	}
 
-	updateInactivePartitionCmd := exec.Command("dd", "if="+OSUpdateFile, "of="+u.inactivePartition.Device, "bs=4M", "status=progress", "conv=fsync")
+	updateInactivePartitionCmd := exec.Command("dd", "if="+OSUpdateFile, "of="+u.inactivePartition.Device, "bs=4M", "conv=fsync")
 	ok, err := executeCommandAndWait(updateInactivePartitionCmd)
 	if err != nil {
 		return false, err
@@ -1045,9 +934,7 @@ func (u *UpdateService) initiateOSUpdate(OSUpdateFile string) (bool, error) {
 
 // failedExecution will update the state, metadata file and send the error mqtt message
 func (u *UpdateService) failedExecution(err error, errorMessage string) {
-	fmt.Println("STATE:: ", u.state)
 	u.setState(constants.UpdateStateFailure)
-	fmt.Println("STATE 1:: ", u.state)
 	u.updateMetadata.Status = string(u.state)
 	u.updateMetadata.ErrorLog = fmt.Sprintf("%v: %s", err, errorMessage)
 	u.fileMetadataContent.Update = u.updateMetadata
@@ -1094,33 +981,8 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 	u.fileMetadataContent.Update = u.updateMetadata
 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
 
-	// send mqtt error message
-	// requestPayload := &models.Ack{
-	// 	UpdateId: u.updateMetadata.UpdateId,
-	// 	DeviceId: u.DeviceInfo.GetDeviceID(),
-	// 	Status:   string(u.state),
-	// 	Error:    fmt.Sprintf("%s: %v", errorMessage, err),
-	// }
-	// err = u.handleAckMessages(requestPayload)
-	// mqttPayloadBytes, err := json.Marshal(&mqttPayload)
-	// if err != nil {
-	// 	u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to marshal mqtt payload: %v;", err)
-	// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-	// 	return
-	// }
-
-	// token := u.MqttClient.Publish(u.SharedAcknowledgementMqttTopic, byte(2), false, mqttPayloadBytes)
-	// token.Wait()
-	// if token.Error() != nil {
-	// 	u.updateMetadata.ErrorLog += fmt.Sprintf("Failed to publish mqtt message: %v;", err)
-	// 	u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent)
-	// 	return
-	// }
-
 	u.Logger.Error().Err(err).Msg(u.updateMetadata.ErrorLog)
 	u.setState(constants.UpdateStateIdle)
-
-	fmt.Println("CUR STATE:: ", u.state)
 
 	if u.ctx != nil {
 		u.cancel()
@@ -1131,9 +993,7 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 
 // failedCloudResponse will update the log in device
 func (u *UpdateService) failedCloudResponse(err error, errorMessage string) {
-	fmt.Println("STATE:: ", u.state)
 	u.setState(constants.UpdateStateFailure)
-	fmt.Println("STATE 1:: ", u.state)
 	u.updateMetadata.Status = string(u.state)
 	u.updateMetadata.ErrorLog = fmt.Sprintf("%v; %s", err, errorMessage)
 	u.fileMetadataContent.Update = u.updateMetadata
@@ -1141,8 +1001,6 @@ func (u *UpdateService) failedCloudResponse(err error, errorMessage string) {
 
 	u.Logger.Error().Err(err).Msg(u.updateMetadata.ErrorLog)
 	u.setState(constants.UpdateStateIdle)
-
-	fmt.Println("CUR STATE:: ", u.state)
 
 	if u.ctx != nil {
 		u.cancel()
@@ -1181,14 +1039,15 @@ func executeCommandAndWait(cmd *exec.Cmd) (bool, error) {
 
 	// Check error
 	if err != nil {
-		// Print captured stderr/stdout so we can see the actual cause
+		// Check if err is greater than 300 characters, trim and return last 100 characters
+		errMsg := errBuf.String()
+		if len(errMsg) > 300 {
+			errMsg = errMsg[len(errMsg)-100:]
+		}
 		if errBuf.Len() > 0 {
-			// fmt.Println("Error details (stderr):")
-			// fmt.Print(errBuf.String())
-			return false, fmt.Errorf("error running command[%s]: %s", cmd.String(), errBuf.String())
+			return false, fmt.Errorf("error running command[%s]: %s", cmd.String(), errMsg)
 		}
 		if outBuf.Len() > 0 {
-			// fmt.Println("Partial output (stdout):")
 			fmt.Print(outBuf.String())
 		}
 	}
