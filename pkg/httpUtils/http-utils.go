@@ -50,7 +50,8 @@ func DownloadFileByPresignedURL(presignedURL string, outputPath string) error {
 	return nil
 }
 
-func GetAcknowledgementResponse(url string, postBody string) (int, []byte, error) {
+func GetAcknowledgementResponse(jwtToken string, url string, postBody string) (int, []byte, error) {
+	fmt.Println("CALLED GetAcknowledgementResponse")
 	// Create new request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(postBody)))
 	if err != nil {
@@ -58,7 +59,7 @@ func GetAcknowledgementResponse(url string, postBody string) (int, []byte, error
 	}
 
 	// Add JWT token here
-	// req.Header.Set("Authorization", "Bearer your_token_here")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", jwtToken))
 	req.Header.Set("Content-Type", "application/json")
 
 	// Create client with timeout

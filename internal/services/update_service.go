@@ -28,10 +28,12 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/file"
 	http_utils "github.com/benmeehan/iot-agent/pkg/httpUtils"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 )
 
 // UpdateService struct with FSM
 type UpdateService struct {
+	JwtManager                     jwt.JWTManagerInterface
 	SubTopic                       string
 	SharedAcknowledgementMqttTopic string
 	AcknowledgementURL             string
@@ -62,11 +64,12 @@ type UpdateService struct {
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
-func NewUpdateService(subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, deviceInfo identity.DeviceInfoInterface, qos int,
+func NewUpdateService(jwtManager jwt.JWTManagerInterface, subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, deviceInfo identity.DeviceInfoInterface, qos int,
 	mqttClient mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
 	metadataFile string) *UpdateService {
 
 	return &UpdateService{
+		JwtManager:                     jwtManager,
 		SubTopic:                       subTopic,
 		SharedAcknowledgementMqttTopic: sharedAcknowledgementMqttTopic,
 		AcknowledgementURL:             acknowledgementURL,
@@ -471,7 +474,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 				if ack.Error != "" {
 					// Do not retry if there is error from cloud
 					if !strings.Contains(ack.Error, "connection timeout error") {
-						u.failedCloudResponse(fmt.Errorf("error: server down"), ack.Error)
+						u.failedCloudResponse(fmt.Errorf("error: server error"), ack.Error)
 						return
 					}
 				} else if ack.Status == string(constants.UpdateStateDownloading) {
@@ -626,7 +629,7 @@ func (u *UpdateService) UpdateProcssFlow() {
 					return
 				}
 
-			case <-time.After(1 * time.Second):
+			case <-time.After(10 * time.Second):
 				retry++
 				time.Sleep(5 * time.Second)
 
@@ -679,7 +682,7 @@ func (u *UpdateService) handleAckMessages(requestPayload *models.Ack) {
 		ackResponse.Message.Error = err.Error()
 	}
 
-	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.AcknowledgementURL, string(requestPayloadBytes))
+	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.JwtManager.GetJWT(), u.AcknowledgementURL, string(requestPayloadBytes))
 	if err != nil {
 		u.Logger.Error().Err(err).Msg("failed to get response")
 		ackResponse.Message.Error = err.Error()
@@ -697,7 +700,8 @@ func (u *UpdateService) handleAckMessages(requestPayload *models.Ack) {
 			u.Logger.Error().Err(err).Msg("failed to parse failure acknowledgement message")
 			ackResponse.Message.Error = err.Error()
 		} else {
-			ackResponse.Message.Error = fmt.Sprintf("%s; %s", ackResponse.Status, ackResponse.Message.Error)
+			fmt.Println("RES: ", ackResponse)
+			ackResponse.Message.Error = fmt.Sprintf("STAUS: %s; %s: %s", strconv.Itoa(status_code), ackResponse.Status, ackResponse.Message.Error)
 		}
 	}
 
@@ -955,7 +959,7 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 		ackResponse.Message.Error = err.Error()
 	}
 
-	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.AcknowledgementURL, string(requestPayloadBytes))
+	status_code, dataBytes, err := http_utils.GetAcknowledgementResponse(u.JwtManager.GetJWT(), u.AcknowledgementURL, string(requestPayloadBytes))
 	if err != nil {
 		u.Logger.Error().Err(err).Msg("failed to get response")
 		ackResponse.Message.Error = err.Error()

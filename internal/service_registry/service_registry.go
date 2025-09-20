@@ -222,6 +222,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddleware
 			enabled: config.Services.Update.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewUpdateService(
+					sr.jwtManager,
 					config.Services.Update.Topic,
 					config.Services.Update.AcknowledgementTopic,
 					config.Services.Update.AcknowledgementURL,
