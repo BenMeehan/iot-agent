@@ -15,6 +15,7 @@ import (
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/benmeehan/iot-agent/internal/state_managers"
 	"github.com/benmeehan/iot-agent/pkg/identity"
+	"github.com/benmeehan/iot-agent/pkg/jwt"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 )
@@ -30,6 +31,7 @@ type CommandService struct {
 	statusEndpoint   string // HTTP endpoint for status updates
 
 	// Dependencies
+	jwtManager     jwt.JWTManagerInterface
 	mqttMiddleware mqtt_middleware.MQTTMiddleware
 	deviceInfo     identity.DeviceInfoInterface
 	logger         zerolog.Logger
@@ -49,6 +51,7 @@ type CommandService struct {
 
 // NewCommandService initializes a new CommandService with given parameters.
 func NewCommandService(
+	jwtManager jwt.JWTManagerInterface,
 	subTopic string,
 	qos, outputSizeLimit, maxExecutionTime int,
 	statusEndpoint string,
@@ -67,6 +70,7 @@ func NewCommandService(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &CommandService{
+		jwtManager:       jwtManager,
 		subTopic:         subTopic,
 		qos:              qos,
 		outputSizeLimit:  outputSizeLimit,
@@ -331,6 +335,7 @@ func (cs *CommandService) sendStatusUpdate(status *models.StatusUpdate) error {
 		cs.logger.Error().Err(err).Msg("Failed to create status update request")
 		return err
 	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cs.jwtManager.GetJWT()))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := cs.httpClient.Do(req)
