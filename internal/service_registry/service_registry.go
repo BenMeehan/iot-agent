@@ -159,6 +159,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddleware
 			enabled: config.Services.Command.Enabled,
 			constructor: func() (Service, error) {
 				return services.NewCommandService(
+					sr.jwtManager,
 					config.Services.Command.Topic,
 					config.Services.Command.QOS,
 					config.Services.Command.OutputSizeLimit,
