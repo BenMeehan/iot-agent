@@ -6,7 +6,7 @@ import (
 
 type UpdateCommandPayload struct {
 	UpdateId       string `json:"update_id,omitempty"`
-	UpdateVersion  string `json:"update_version,omitempty"`
+	UpdateVersion  string `json:"artifact_version,omitempty"`
 	FileName       string `json:"update_file_name,omitempty"`
 	FileUrl        string `json:"update_file_url,omitempty"`
 	FileSize       string `json:"update_file_size,omitempty"`
@@ -34,24 +34,19 @@ type UpdatesMetaData struct {
 	FileName       string    `json:"file_name"`
 	FileUrl        string    `json:"update_file_url,omitempty"`
 	FileSize       string    `json:"file_size,omitempty"`
-	Version        string    `json:"version"`
+	Version        string    `json:"artifact_version"`
 	SHA256Checksum string    `json:"checksum"`
 	Status         string    `json:"status,omitempty"`
 	ErrorLog       string    `json:"error_log,omitempty"`
 	ManifestData   string    `json:"manifest"`
 }
 
-type StatusUpdatePayload struct {
-	UpdateId string `json:"update_id"`
-	DeviceId string `json:"device_id"`
-	Status   string `json:"status"`
-}
-
 type Ack struct {
-	UpdateId string `json:"update_id"`
-	DeviceId string `json:"device_id"`
-	Status   string `json:"status"`
-	Error    string `json:"error"`
+	DeviceId        string `json:"device_id"`
+	ActivePartition string `json:"active_partition"`
+	UpdatePartition string `json:"update_partition"`
+	Status          string `json:"status"`
+	Error           string `json:"error"`
 }
 
 type AckResponse struct {
