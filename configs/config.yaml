@@ -73,4 +73,4 @@ services:
     enabled: false
     metadata_file: "updates-metadata.json"
     acknowledgement_topic: "update-status"
-    acknowledgement_url: "http://192.168.1.36:7000/update/ack"
+    acknowledgement_url: "http://192.168.1.36:7001/update/ack"

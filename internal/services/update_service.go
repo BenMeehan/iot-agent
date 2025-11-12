@@ -115,6 +115,7 @@ func (u *UpdateService) Start() error {
 	// Checking metadata file exists
 	isFileExists, err := u.FileClient.IsFileExists(u.metadataFile)
 	if isFileExists {
+		fmt.Println("META1::", u.metadataFile)
 		metadataFileContent, err := u.FileClient.ReadFile(u.metadataFile)
 		if err != nil {
 			return fmt.Errorf("error reading metadata file: %v", err)
@@ -151,9 +152,10 @@ func (u *UpdateService) Start() error {
 			u.UpdateProcssFlow()
 			// Send acknowledgment data
 			requestPayload := &models.Ack{
-				UpdateId: u.fileMetadataContent.Update.UpdateId,
-				DeviceId: u.DeviceInfo.GetDeviceID(),
-				Status:   prevState,
+				DeviceId:        u.DeviceInfo.GetDeviceID(),
+				ActivePartition: u.activePartition.Device,
+				UpdatePartition: u.inactivePartition.Device,
+				Status:          prevState,
 			}
 			// u.handleAckMessages(requestPayload)
 			u.ackRequestChannel <- requestPayload
@@ -163,7 +165,7 @@ func (u *UpdateService) Start() error {
 		if err != nil {
 			return fmt.Errorf("unable to read metadata file: %v", err)
 		}
-
+		fmt.Println("META2::", u.metadataFile)
 		// File does not exist
 		if err := u.FileClient.WriteJsonFile(u.metadataFile, u.fileMetadataContent); err != nil {
 			return fmt.Errorf("unable to write metadata file: %v", err)
@@ -234,8 +236,8 @@ func (u *UpdateService) verifySystemPartition() error {
 	// Identify active, inactive, and data partitions
 	var bootPartition, activePartition, inactivePartition, dataPartition models.Partition
 	possibleBootPaths := []string{"/boot"}
-	possibleInactivePaths := []string{"/a", "/b"}
-	possibleDataPaths := []string{"/data", "/userdata"}
+	possibleInactivePaths := []string{"/rootfs_a", "/rootfs_b"}
+	possibleDataPaths := []string{"/data"}
 
 	for _, mount := range mounts {
 		if mount.MountPoint == "/" {
@@ -442,9 +444,10 @@ func (u *UpdateService) InitiateUpdate(client MQTT.Client, msg MQTT.Message) {
 
 	// send downloading mqtt message
 	requestPayload := &models.Ack{
-		UpdateId: payload.UpdateId,
-		DeviceId: u.DeviceInfo.GetDeviceID(),
-		Status:   string(u.state),
+		DeviceId:        u.DeviceInfo.GetDeviceID(),
+		ActivePartition: u.activePartition.Device,
+		UpdatePartition: u.inactivePartition.Device,
+		Status:          string(u.state),
 	}
 
 	u.UpdateProcssFlow() // Start the consumer goroutine first
@@ -497,8 +500,8 @@ func (u *UpdateService) UpdateProcssFlow() {
 						return
 					}
 
-					// Check if the space on dataPartition > fileSize
-					cmdStr := fmt.Sprintf("df -m %s | awk 'NR==2 {print $4}'", u.dataPartition.MountPoint)
+					// Check if the space(in bytes) on dataPartition > fileSize
+					cmdStr := fmt.Sprintf("df -B 1 %s | awk 'NR==2 {print $4}'", u.dataPartition.MountPoint)
 					cmd := exec.Command("sh", "-c", cmdStr)
 
 					output, err := executeCommandAndGetOutput(cmd)
@@ -544,9 +547,10 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 					// send installing mqtt message
 					requestPayload := &models.Ack{
-						UpdateId: u.updateMetadata.UpdateId,
-						DeviceId: u.DeviceInfo.GetDeviceID(),
-						Status:   string(u.state),
+						DeviceId:        u.DeviceInfo.GetDeviceID(),
+						ActivePartition: u.activePartition.Device,
+						UpdatePartition: u.inactivePartition.Device,
+						Status:          string(u.state),
 					}
 					u.ackRequestChannel <- requestPayload
 				} else if ack.Status == string(constants.UpdateStateInstalling) {
@@ -583,9 +587,10 @@ func (u *UpdateService) UpdateProcssFlow() {
 					} else {
 						// send verifying mqtt message
 						requestPayload := &models.Ack{
-							UpdateId: u.updateMetadata.UpdateId,
-							DeviceId: u.DeviceInfo.GetDeviceID(),
-							Status:   string(u.state),
+							DeviceId:        u.DeviceInfo.GetDeviceID(),
+							ActivePartition: u.activePartition.Device,
+							UpdatePartition: u.inactivePartition.Device,
+							Status:          string(u.state),
 						}
 
 						u.ackRequestChannel <- requestPayload
@@ -604,9 +609,10 @@ func (u *UpdateService) UpdateProcssFlow() {
 
 					// send success mqtt message
 					requestPayload := &models.Ack{
-						UpdateId: u.updateMetadata.UpdateId,
-						DeviceId: u.DeviceInfo.GetDeviceID(),
-						Status:   string(u.state),
+						DeviceId:        u.DeviceInfo.GetDeviceID(),
+						ActivePartition: u.activePartition.Device,
+						UpdatePartition: u.inactivePartition.Device,
+						Status:          string(u.state),
 					}
 
 					u.ackRequestChannel <- requestPayload
@@ -634,9 +640,10 @@ func (u *UpdateService) UpdateProcssFlow() {
 				time.Sleep(5 * time.Second)
 
 				requestPayload := &models.Ack{
-					UpdateId: u.updateMetadata.UpdateId,
-					DeviceId: u.DeviceInfo.GetDeviceID(),
-					Status:   string(u.state),
+					DeviceId:        u.DeviceInfo.GetDeviceID(),
+					ActivePartition: u.activePartition.Device,
+					UpdatePartition: u.inactivePartition.Device,
+					Status:          string(u.state),
 				}
 				// u.Logger.Info().Interface("payload", requestPayload).Msg("Sending retry ACK to ackRequestChannel")
 				select {
@@ -946,10 +953,11 @@ func (u *UpdateService) failedExecution(err error, errorMessage string) {
 
 	// update cloud with acknowledgement message on failure
 	requestPayload := &models.Ack{
-		UpdateId: u.updateMetadata.UpdateId,
-		DeviceId: u.DeviceInfo.GetDeviceID(),
-		Status:   string(u.state),
-		Error:    u.updateMetadata.ErrorLog,
+		DeviceId:        u.DeviceInfo.GetDeviceID(),
+		Status:          string(u.state),
+		ActivePartition: u.activePartition.Device,
+		UpdatePartition: u.inactivePartition.Device,
+		Error:           u.updateMetadata.ErrorLog,
 	}
 
 	var ackResponse models.AckResponse
