@@ -2,21 +2,27 @@ package metrics_collectors
 
 import (
 	"context"
+	"time"
 
 	"github.com/benmeehan/iot-agent/internal/models"
 	"github.com/rs/zerolog"
 	"github.com/shirou/gopsutil/net"
 )
 
-// NetworkMetrics holds the total bytes received and sent over network interfaces.
+// NetworkMetrics holds the network I/O rate metrics.
 type NetworkMetrics struct {
-	NetworkIn  float64 `json:"network_in,omitempty"`
-	NetworkOut float64 `json:"network_out,omitempty"`
+	NetworkInRate  float64 `json:"network_in,omitempty"`  // bytes/sec
+	NetworkOutRate float64 `json:"network_out,omitempty"` // bytes/sec
 }
 
-// NetworkMetricCollector collects network I/O metrics.
+// NetworkMetricCollector collects network I/O rates.
 type NetworkMetricCollector struct {
 	Logger zerolog.Logger
+
+	// cache previous values for rate calculation
+	lastIn   uint64
+	lastOut  uint64
+	lastTime time.Time
 }
 
 // Name returns the identifier for the network metric collector.
@@ -24,7 +30,7 @@ func (n *NetworkMetricCollector) Name() string {
 	return "network"
 }
 
-// Collect retrieves total bytes received and sent across network interfaces.
+// Collect retrieves the network I/O rates.
 func (n *NetworkMetricCollector) Collect(ctx context.Context) interface{} {
 	n.Logger.Debug().Msg("Collecting network I/O metrics")
 
@@ -38,15 +44,40 @@ func (n *NetworkMetricCollector) Collect(ctx context.Context) interface{} {
 		return nil
 	}
 
+	curr := netStats[0]
+	now := time.Now()
+
+	// first run → cannot compute rate
+	if n.lastTime.IsZero() {
+		n.lastIn = curr.BytesRecv
+		n.lastOut = curr.BytesSent
+		n.lastTime = now
+		return nil
+	}
+
+	// time delta
+	secs := now.Sub(n.lastTime).Seconds()
+	if secs <= 0 {
+		return nil
+	}
+
+	inRate := float64(curr.BytesRecv-n.lastIn) / secs
+	outRate := float64(curr.BytesSent-n.lastOut) / secs
+
+	// update cache
+	n.lastIn = curr.BytesRecv
+	n.lastOut = curr.BytesSent
+	n.lastTime = now
+
 	metrics := NetworkMetrics{
-		NetworkIn:  float64(netStats[0].BytesRecv),
-		NetworkOut: float64(netStats[0].BytesSent),
+		NetworkInRate:  inRate,
+		NetworkOutRate: outRate,
 	}
 
 	n.Logger.Debug().
-		Float64("network_in_bytes", metrics.NetworkIn).
-		Float64("network_out_bytes", metrics.NetworkOut).
-		Msg("Network I/O metrics collected successfully")
+		Float64("network_in", metrics.NetworkInRate).
+		Float64("network_out", metrics.NetworkOutRate).
+		Msg("Network I/O rate collected successfully")
 
 	return metrics
 }
@@ -59,12 +90,12 @@ func (n *NetworkMetricCollector) IsEnabled(config *models.MetricsConfig) bool {
 	return config.MonitorNetwork
 }
 
-// Unit specifies the unit for network I/O metrics.
+// Unit specifies the unit for the network I/O rate metric.
 func (n *NetworkMetricCollector) Unit() string {
-	return "bytes"
+	return "bytes per second"
 }
 
-// Description provides details of the network I/O metrics collected.
+// Description provides a summary of the network metric collected.
 func (n *NetworkMetricCollector) Description() string {
-	return "Total bytes received (NetworkIn) and sent (NetworkOut) across network interfaces."
+	return "Network receive/send rate in bytes per second."
 }

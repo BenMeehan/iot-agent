@@ -29,12 +29,13 @@ type ProcessMetrics struct {
 
 // MetricsConfig defines the structure of the configuration file for the metrics to be monitored.
 type MetricsConfig struct {
-	MonitorCPU      bool     `json:"monitor_cpu"`       // Flag to indicate whether CPU usage should be monitored
-	MonitorMemory   bool     `json:"monitor_memory"`    // Flag to indicate whether memory usage should be monitored
-	MonitorDisk     bool     `json:"monitor_disk"`      // Flag to indicate whether disk usage should be monitored
-	MonitorNetwork  bool     `json:"monitor_network"`   // Flag to indicate whether network usage should be monitored
-	ProcessNames    []string `json:"process_names"`     // List of specific process names to monitor
-	MonitorProcCPU  bool     `json:"monitor_proc_cpu"`  // Flag to indicate whether to monitor CPU usage per process
-	MonitorProcMem  bool     `json:"monitor_proc_mem"`  // Flag to indicate whether to monitor memory usage per process
-	MonitorProcIOps bool     `json:"monitor_proc_iops"` // Flag to indicate whether to monitor io operations per process
+	MonitorCPU        bool     `json:"monitor_cpu"`        // Flag to indicate whether CPU usage should be monitored
+	MonitorMemory     bool     `json:"monitor_memory"`     // Flag to indicate whether memory usage should be monitored
+	MonitorDisk       bool     `json:"monitor_disk"`       // Flag to indicate whether disk usage should be monitored
+	MonitorNetwork    bool     `json:"monitor_network"`    // Flag to indicate whether network usage should be monitored
+	MonitorGoroutines bool     `json:"monitor_goroutines"` // Flag to indicate whether goroutine count should be monitored
+	ProcessNames      []string `json:"process_names"`      // List of specific process names to monitor
+	MonitorProcCPU    bool     `json:"monitor_proc_cpu"`   // Flag to indicate whether to monitor CPU usage per process
+	MonitorProcMem    bool     `json:"monitor_proc_mem"`   // Flag to indicate whether to monitor memory usage per process
+	MonitorProcIOps   bool     `json:"monitor_proc_iops"`  // Flag to indicate whether to monitor io operations per process
 }
