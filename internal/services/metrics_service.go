@@ -101,6 +101,10 @@ func (m *MetricsService) registerDefaultCollectors() {
 		m.registry.Register(&metrics_collectors.NetworkMetricCollector{Logger: m.logger})
 		m.logger.Debug().Msg("Registered Network metric collector")
 	}
+	if m.metricsConfig.MonitorGoroutines {
+		m.registry.Register(&metrics_collectors.GoroutineMetricCollector{Logger: m.logger})
+		m.logger.Debug().Msg("Registered Goroutine metric collector")
+	}
 }
 
 // Start begins periodic metrics collection and publishing.
