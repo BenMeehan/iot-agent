@@ -15,6 +15,7 @@ import (
 	"github.com/benmeehan/iot-agent/pkg/file"
 	"github.com/benmeehan/iot-agent/pkg/identity"
 	"github.com/rs/zerolog"
+	"github.com/shirou/gopsutil/process"
 )
 
 // MetricsService collects and publishes system telemetry data via MQTT.
@@ -312,6 +313,7 @@ func (m *MetricsService) registerProcessMetricsCollector(config *models.MetricsC
 		MonitorProcCPU:     config.MonitorProcCPU,
 		MonitorProcMem:     config.MonitorProcMem,
 		MonitorProcIO:      config.MonitorProcIOps,
+		PrevDisk: make(map[int32]*process.IOCountersStat),
 		WorkerPool:         m.workerPool,
 	})
 

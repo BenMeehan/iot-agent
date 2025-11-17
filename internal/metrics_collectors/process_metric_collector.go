@@ -17,6 +17,7 @@ type ProcessMetricCollector struct {
 	MonitorProcCPU     bool
 	MonitorProcMem     bool
 	MonitorProcIO      bool
+	PrevDisk map[int32]*process.IOCountersStat
 	WorkerPool         *utils.WorkerPool
 }
 
@@ -102,15 +103,26 @@ func (p *ProcessMetricCollector) collectProcessMetrics(proc *process.Process, na
 		}
 	}
 
-	// Collect I/O operations if enabled.
-	if p.MonitorProcIO {
-		if ioCounters, err := proc.IOCounters(); err == nil {
-			metrics.ReadOps = float64(ioCounters.ReadCount)
-			metrics.WriteOps = float64(ioCounters.WriteCount)
-		} else {
-			p.logMetricError("I/O counters", err, name, proc.Pid)
-		}
-	}
+	// Disk I/O per cycle
+    if p.MonitorProcIO {
+        if ioNow, err := proc.IOCounters(); err == nil && ioNow != nil {
+            prev, ok := p.PrevDisk[proc.Pid]
+
+            if ok && prev != nil {
+                metrics.ReadOps  = float64(ioNow.ReadCount  - prev.ReadCount)
+                metrics.WriteOps = float64(ioNow.WriteCount - prev.WriteCount)
+            } else {
+                metrics.ReadOps = 0
+                metrics.WriteOps = 0
+            }
+
+            // store current for next cycle
+            p.PrevDisk[proc.Pid] = ioNow
+
+        } else {
+            p.logMetricError("I/O counters", err, name, proc.Pid)
+        }
+    }
 
 	return metrics
 }
