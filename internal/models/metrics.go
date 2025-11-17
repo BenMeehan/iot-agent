@@ -21,7 +21,7 @@ type Metric struct {
 type ProcessMetrics struct {
 	ProcessName string  `json:"process_name"`        // Name of the process
 	ProcessID   int32   `json:"process_id"`          // ID of the process
-	CPUUsage    float64 `json:"cpu_usage,omitempty"` // CPU usage by the process as a percentage (optional)
+	CPUUsage    float64 `json:"cpu,omitempty"` // CPU usage by the process as a percentage (optional)
 	Memory      float64 `json:"memory,omitempty"`    // Memory usage by the process in bytes (optional)
 	ReadOps     float64 `json:"read_ops,omitempty"`  // Number of read operations performed by the process (optional)
 	WriteOps    float64 `json:"write_ops,omitempty"` // Number of write operations performed by the process (optional)
