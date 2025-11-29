@@ -55,22 +55,18 @@ type AckResponse struct {
 }
 
 type Manifest struct {
-	OSUpdate string `json:"os_update"`
-	Updates  Update `json:"updates"`
-}
-
-type Update struct {
+	OSUpdate      string         `json:"os_update"`
 	FileUpdates   []FileUpdate   `json:"file_update"`
 	FolderUpdates []FolderUpdate `json:"folder_update"`
 }
 
 type FileUpdate struct {
-	Path   string `json:"path"`
-	Update string `json:"update"`
+	UpdateFile      string `json:"update_file"`
+	DestinationPath string `json:"destination_path"`
 }
 
 type FolderUpdate struct {
-	Path      string `json:"path"`
-	Update    string `json:"update"`
-	Overwrite bool   `json:"overwrite"`
+	UpdateFolder    string `json:"update_folder"`
+	DestinationPath string `json:"destination_path"`
+	Overwrite       bool   `json:"overwrite"`
 }

@@ -226,6 +226,7 @@ func (sr *ServiceRegistry) RegisterServices(config *utils.Config, mqttMiddleware
 					config.Services.Update.Topic,
 					config.Services.Update.AcknowledgementTopic,
 					config.Services.Update.AcknowledgementURL,
+					config.Services.Update.OsUpdateBufferSpace,
 					deviceInfo,
 					config.Services.Update.QOS,
 					mqttMiddlewareChain,

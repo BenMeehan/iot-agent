@@ -84,6 +84,7 @@ type Config struct {
 			MetadataFile         string `yaml:"metadata_file"`         // Path to save downloaded update files
 			AcknowledgementTopic string `yaml:"acknowledgement_topic"` // Shared Acknowledgement MQTT topic for update status
 			AcknowledgementURL   string `yaml:"acknowledgement_url"`   // Acknowledgement URL endpoint
+			OsUpdateBufferSpace  int64  `yaml:"osUpdateBufferSpace"`   // OS Update Buffer Space in MB
 		} `yaml:"update_service"`
 	} `yaml:"services"`
 

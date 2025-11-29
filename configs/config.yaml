@@ -28,7 +28,7 @@ services:
     base_delay: 2s
     max_backoff: 60s
     response_timeout: 60s
-    enabled: true
+    enabled: false
   heartbeat:
     topic: "iot-heartbeat"
     interval: 10s
@@ -70,7 +70,8 @@ services:
   update_service:
     topic: "iot-update"
     qos: 2
-    enabled: false
+    enabled: true
     metadata_file: "updates-metadata.json"
     acknowledgement_topic: "update-status"
     acknowledgement_url: "http://192.168.1.36:7001/update/ack"
+    osUpdateBufferSpace: 100 # in MB

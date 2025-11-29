@@ -1,6 +1,7 @@
 package services
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
@@ -21,6 +22,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
+	"golang.org/x/sys/unix"
 
 	"github.com/benmeehan/iot-agent/internal/constants"
 	mqtt_middleware "github.com/benmeehan/iot-agent/internal/middlewares/mqtt"
@@ -37,6 +39,7 @@ type UpdateService struct {
 	SubTopic                       string
 	SharedAcknowledgementMqttTopic string
 	AcknowledgementURL             string
+	OsUpdateBufferSpace            int64
 	DeviceInfo                     identity.DeviceInfoInterface
 	QOS                            int
 	MqttClient                     mqtt_middleware.MQTTMiddleware
@@ -64,7 +67,7 @@ type UpdateService struct {
 }
 
 // NewUpdateService creates and returns a new instance of UpdateService.
-func NewUpdateService(jwtManager jwt.JWTManagerInterface, subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, deviceInfo identity.DeviceInfoInterface, qos int,
+func NewUpdateService(jwtManager jwt.JWTManagerInterface, subTopic string, sharedAcknowledgementMqttTopic string, acknowledgementURL string, osUpdateBufferSpace int64, deviceInfo identity.DeviceInfoInterface, qos int,
 	mqttClient mqtt_middleware.MQTTMiddleware, fileClient file.FileOperations, logger zerolog.Logger,
 	metadataFile string) *UpdateService {
 
@@ -73,12 +76,14 @@ func NewUpdateService(jwtManager jwt.JWTManagerInterface, subTopic string, share
 		SubTopic:                       subTopic,
 		SharedAcknowledgementMqttTopic: sharedAcknowledgementMqttTopic,
 		AcknowledgementURL:             acknowledgementURL,
-		DeviceInfo:                     deviceInfo,
-		QOS:                            qos,
-		MqttClient:                     mqttClient,
-		FileClient:                     fileClient,
-		Logger:                         logger,
-		metadataFile:                   metadataFile,
+		OsUpdateBufferSpace:            osUpdateBufferSpace,
+
+		DeviceInfo:   deviceInfo,
+		QOS:          qos,
+		MqttClient:   mqttClient,
+		FileClient:   fileClient,
+		Logger:       logger,
+		metadataFile: metadataFile,
 
 		state: constants.UpdateStateIdle, // Assuming an initial state
 		validTransitions: map[constants.UpdateState][]constants.UpdateState{
@@ -528,16 +533,16 @@ func (u *UpdateService) UpdateProcssFlow() {
 					}
 
 					// Vadlidate file checksum
-					checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
-					if err != nil {
-						u.failedExecution(err, "error validating checksum")
-						return
-					}
+					// checksumValue, err := u.FileClient.GetFileHash(u.dataPartition.MountPoint + "/updates/" + u.updateMetadata.FileName)
+					// if err != nil {
+					// 	u.failedExecution(err, "error validating checksum")
+					// 	return
+					// }
 
-					if checksumValue != u.updateMetadata.SHA256Checksum {
-						u.failedExecution(err, "incorrect checksum")
-						return
-					}
+					// if checksumValue != u.updateMetadata.SHA256Checksum {
+					// 	u.failedExecution(fmt.Errorf("incorrect checksum"), "validation failed checking checksum value")
+					// 	return
+					// }
 
 					// Update state to installing and send mqtt request
 					if err := u.setState(constants.UpdateStateInstalling); err != nil {
@@ -775,30 +780,30 @@ func (u *UpdateService) installUpdates() bool {
 	}
 
 	// Unzip the .zip file
-	cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		errMessage := ""
-		// Delete the extracted file
-		_, deleteErr := u.deleteExtractedFile(updateZipFileLocation)
-		if deleteErr != nil {
-			errMessage += fmt.Sprintf("error deleting partially extracted file: %v; ", deleteErr)
-		}
+	// cmd := exec.Command("unzip", "-o", updateZipFileLocation, "-d", u.dataPartition.MountPoint+"/updates") // -o to overwrite if extract already exists
+	// output, err := cmd.CombinedOutput()
+	// if err != nil {
+	// 	errMessage := ""
+	// 	// Delete the extracted file
+	// 	_, deleteErr := u.deleteExtractedFile(updateZipFileLocation)
+	// 	if deleteErr != nil {
+	// 		errMessage += fmt.Sprintf("error deleting partially extracted file: %v; ", deleteErr)
+	// 	}
 
-		// Check if the error is an ExitError
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// Get the exit code
-			exitCode := exitErr.ExitCode()
-			if exitCode == 50 {
-				errMessage += fmt.Sprintf("error code(%d): %s; ", exitCode, string(output))
-			} else {
-				errMessage += fmt.Sprintf("error code(%d): %s; ", exitCode, string(output))
-			}
-		}
-		errMessage += "error extracting zip file"
-		u.failedExecution(err, errMessage)
-		return false
-	}
+	// 	// Check if the error is an ExitError
+	// 	if exitErr, ok := err.(*exec.ExitError); ok {
+	// 		// Get the exit code
+	// 		exitCode := exitErr.ExitCode()
+	// 		if exitCode == 50 {
+	// 			errMessage += fmt.Sprintf("error code(%d): %s; ", exitCode, string(output))
+	// 		} else {
+	// 			errMessage += fmt.Sprintf("error code(%d): %s; ", exitCode, string(output))
+	// 		}
+	// 	}
+	// 	errMessage += "error extracting zip file"
+	// 	u.failedExecution(err, errMessage)
+	// 	return false
+	// }
 
 	// Parse the manifest
 	if err := json.Unmarshal([]byte(u.updateMetadata.ManifestData), &u.manifest); err != nil {
@@ -806,49 +811,174 @@ func (u *UpdateService) installUpdates() bool {
 		return false
 	}
 
+	// Initial check for comparing manifest and contents inside zip file
+	zipReader, err := zip.OpenReader(updateZipFileLocation)
+	if err != nil {
+		u.failedExecution(err, "failed to read zip file")
+		return false
+	}
+	defer zipReader.Close()
+
+	var rootFileAndFolderSizeBytes, dataFileAndFolderSizeBytes int64
+	for _, f := range zipReader.File {
+		isManifestFound := false
+		if f.Name == u.manifest.OSUpdate {
+			isManifestFound = true
+
+			// Check size
+			getInactivePartitionSizeCmdStr := fmt.Sprintf("blockdev --getsize64 %s | awk '{print $1}'", u.fileMetadataContent.InActivePartition.Device)
+			getInactivePartitionSizeCmd := exec.Command("sh", "-c", getInactivePartitionSizeCmdStr)
+			inactivePartitionSizeStr, err := executeCommandAndGetOutput(getInactivePartitionSizeCmd)
+			if err != nil {
+				u.failedExecution(err, "failed to get inactive partition size")
+				return false
+			}
+
+			inactivePartitionSizeInt, err := strconv.ParseInt(strings.TrimSpace(inactivePartitionSizeStr), 10, 64)
+			if err != nil {
+				u.failedExecution(err, "failed to parse inactive partition size")
+				return false
+			}
+			if f.FileInfo().Size() > inactivePartitionSizeInt-(u.OsUpdateBufferSpace*1024*1024) {
+				u.failedExecution(fmt.Errorf("update file size greater than inactive partition"), fmt.Sprintf("file_size: %d; inactive_partition_size: %d, buffer_size: %d", f.FileInfo().Size(), inactivePartitionSizeInt, u.OsUpdateBufferSpace*1024*1024))
+				return false
+			}
+
+		} else {
+
+			// Check each folder
+			for _, eachFolder := range u.manifest.FolderUpdates {
+				if eachFolder.UpdateFolder == strings.Split(f.Name, "/")[0] {
+					if !strings.HasPrefix(eachFolder.DestinationPath, "/") {
+						u.failedExecution(fmt.Errorf("invalid destination path"), "destination path should be absolute path")
+						return false
+					}
+
+					// Error if folder update is on inactive partition
+					if strings.HasPrefix(eachFolder.DestinationPath, u.inactivePartition.MountPoint) {
+						u.failedExecution(fmt.Errorf("folder update should not be done on inactive partition"), fmt.Sprintf("file update '%s' can't be done"))
+						return false
+					}
+
+					isManifestFound = true
+
+					if strings.HasPrefix(eachFolder.DestinationPath, "/data") {
+						dataFileAndFolderSizeBytes += f.FileInfo().Size()
+					} else {
+						rootFileAndFolderSizeBytes += f.FileInfo().Size()
+					}
+				}
+			}
+
+			// Check each file
+			for _, eachFile := range u.manifest.FileUpdates {
+				if eachFile.UpdateFile == f.Name && !strings.Contains(eachFile.UpdateFile, "/") {
+					if !strings.HasPrefix(eachFile.DestinationPath, "/") {
+						u.failedExecution(fmt.Errorf("invalid destination path"), "destination path should be absolute path")
+						return false
+					}
+
+					// Error if file update is on inactive partition
+					if strings.HasPrefix(eachFile.DestinationPath, u.inactivePartition.MountPoint) {
+						u.failedExecution(fmt.Errorf("file update should not be done on inactive partition"), fmt.Sprintf("file update '%s' can't be done"))
+						return false
+					}
+
+					isManifestFound = true
+
+					if strings.HasPrefix(eachFile.DestinationPath, "/data") {
+						dataFileAndFolderSizeBytes += f.FileInfo().Size()
+					} else {
+						rootFileAndFolderSizeBytes += f.FileInfo().Size()
+					}
+				}
+			}
+		}
+
+		// If manifest not matched throw error
+		if !isManifestFound {
+			u.failedExecution(fmt.Errorf("manifest data and zip file contents mismatch"), fmt.Sprintf("%s found in zip file not in manifest", f.Name))
+			return false
+		}
+	}
+
+	// Check available space for file/folder update
+	if len(u.manifest.FileUpdates) > 0 || len(u.manifest.FolderUpdates) > 0 {
+		freeSpaceActivePartition, err := getAvailableSpaceBytesByPath(u.activePartition.MountPoint)
+		if err != nil {
+			u.failedExecution(err, fmt.Sprintf("error getting free space on active partition"))
+			return false
+		}
+
+		freeSpaceDataPartition, err := getAvailableSpaceBytesByPath(u.dataPartition.MountPoint)
+		if err != nil {
+			u.failedExecution(err, fmt.Sprintf("error getting free space on active partition"))
+			return false
+		}
+
+		if uint64(rootFileAndFolderSizeBytes) > freeSpaceActivePartition {
+			u.failedExecution(fmt.Errorf("insufficient space in active partition"), fmt.Sprintf("file update size: %d; available free space: %d", rootFileAndFolderSizeBytes, freeSpaceActivePartition))
+			return false
+		}
+		if uint64(dataFileAndFolderSizeBytes) > freeSpaceDataPartition {
+			u.failedExecution(fmt.Errorf("insufficient space in data partition"), fmt.Sprintf("file update size: %d; available free space: %d", rootFileAndFolderSizeBytes, freeSpaceActivePartition))
+			return false
+		}
+	}
+
 	// OS Update
 	if u.manifest.OSUpdate != "" {
 		// Check if update file size is less than inactive partition size
-		ext := filepath.Ext(u.fileMetadataContent.Update.FileName)
-		updateFile := strings.TrimSuffix(u.fileMetadataContent.Update.FileName, ext)
-		updateFilePath := u.dataPartition.MountPoint + "/updates/" + updateFile
-		getUpdatefileSizeCmdStr := fmt.Sprintf("du -hb %s | awk '{print $1/1024/1024}'", updateFilePath)
-		getUpdatefileSizeCmd := exec.Command("sh", "-c", getUpdatefileSizeCmdStr)
-		updatefileSizeStr, err := executeCommandAndGetOutput(getUpdatefileSizeCmd)
-		if err != nil {
-			u.failedExecution(err, "failed to get update file size")
-			return false
-		}
+		// ext := filepath.Ext(u.fileMetadataContent.Update.FileName)
+		// updateFile := strings.TrimSuffix(u.fileMetadataContent.Update.FileName, ext)
+		// updateFilePath := u.dataPartition.MountPoint + "/updates/" + updateFile
+		// getUpdatefileSizeCmdStr := fmt.Sprintf("du -hb %s | awk '{print $1/1024/1024}'", updateFilePath)
+		// getUpdatefileSizeCmd := exec.Command("sh", "-c", getUpdatefileSizeCmdStr)
+		// updatefileSizeStr, err := executeCommandAndGetOutput(getUpdatefileSizeCmd)
+		// if err != nil {
+		// 	u.failedExecution(err, "failed to get update file size")
+		// 	return false
+		// }
 
-		getInactivePartitionSizeCmdStr := fmt.Sprintf("blockdev --getsize64 %s | awk '{print $1/1024/1024}'", u.fileMetadataContent.InActivePartition.Device)
-		getInactivePartitionSizeCmd := exec.Command("sh", "-c", getInactivePartitionSizeCmdStr)
-		inactivePartitionSizeStr, err := executeCommandAndGetOutput(getInactivePartitionSizeCmd)
-		if err != nil {
-			u.failedExecution(err, "failed to get inactive partition size")
-			return false
-		}
+		// getInactivePartitionSizeCmdStr := fmt.Sprintf("blockdev --getsize64 %s | awk '{print $1/1024/1024}'", u.fileMetadataContent.InActivePartition.Device)
+		// getInactivePartitionSizeCmd := exec.Command("sh", "-c", getInactivePartitionSizeCmdStr)
+		// inactivePartitionSizeStr, err := executeCommandAndGetOutput(getInactivePartitionSizeCmd)
+		// if err != nil {
+		// 	u.failedExecution(err, "failed to get inactive partition size")
+		// 	return false
+		// }
 
-		updatefileSizeInt, err := strconv.ParseFloat(strings.TrimSpace(updatefileSizeStr), 32)
-		if err != nil {
-			u.failedExecution(err, "failed to parse update file size")
-			return false
-		}
+		// updatefileSizeInt, err := strconv.ParseFloat(strings.TrimSpace(updatefileSizeStr), 32)
+		// if err != nil {
+		// 	u.failedExecution(err, "failed to parse update file size")
+		// 	return false
+		// }
 
-		inactivePartitionSizeInt, err := strconv.ParseFloat(strings.TrimSpace(inactivePartitionSizeStr), 32)
-		if err != nil {
-			u.failedExecution(err, "failed to parse inactive partition size")
-			return false
-		}
+		// inactivePartitionSizeInt, err := strconv.ParseFloat(strings.TrimSpace(inactivePartitionSizeStr), 32)
+		// if err != nil {
+		// 	u.failedExecution(err, "failed to parse inactive partition size")
+		// 	return false
+		// }
 
-		if updatefileSizeInt > inactivePartitionSizeInt {
-			u.failedExecution(fmt.Errorf("update file size bigger than partition size"), fmt.Sprintf("update file %s should be less than %fMB", updateFile, strings.TrimSpace(inactivePartitionSizeStr)))
-			return false
-		}
+		// if updatefileSizeInt > inactivePartitionSizeInt {
+		// 	u.failedExecution(fmt.Errorf("update file size bigger than partition size"), fmt.Sprintf("update file %s should be less than %fMB", updateFile, strings.TrimSpace(inactivePartitionSizeStr)))
+		// 	return false
+		// }
 
-		_, err = u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + u.manifest.OSUpdate)
-		if err != nil {
-			u.failedExecution(err, "error installing os update")
-			return false
+		// _, err = u.initiateOSUpdate(u.dataPartition.MountPoint + "/updates/" + u.manifest.OSUpdate)
+		// if err != nil {
+		// 	u.failedExecution(err, "error installing os update")
+		// 	return false
+		// }
+
+		for _, f := range zipReader.File {
+			if f.Name == u.manifest.OSUpdate {
+				if err := u.initiateOSUpdateStream(f, u.inactivePartition.Device); err != nil {
+					u.failedExecution(err, "error installing os update")
+					return false
+				}
+				break
+			}
 		}
 
 		// update cmdline.txt to in-active partition
@@ -870,41 +1000,133 @@ func (u *UpdateService) installUpdates() bool {
 	}
 
 	// Folder Update
-	for _, manifestFileUpdate := range u.manifest.Updates.FolderUpdates {
-		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
-		to_path := manifestFileUpdate.Path
+	// for _, manifestFolderUpdate := range u.manifest.FolderUpdates {
+	// 	from_path := u.dataPartition.MountPoint + "/updates/" + manifestFolderUpdate.UpdateFolder
+	// 	to_path := manifestFolderUpdate.DestinationPath
 
-		if manifestFileUpdate.Overwrite {
-			cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", "--delete", from_path, to_path)
-			_, err := executeCommandAndWait(cmd)
-			if err != nil {
-				u.failedExecution(err, "error on folder update")
-				return false
-			}
-		} else {
-			cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
-			_, err := executeCommandAndWait(cmd)
-			if err != nil {
-				u.failedExecution(err, "error on folder update")
-				return false
-			}
-		}
-	}
+	// 	if manifestFolderUpdate.Overwrite {
+	// 		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", "--delete", from_path, to_path)
+	// 		_, err := executeCommandAndWait(cmd)
+	// 		if err != nil {
+	// 			u.failedExecution(err, "error on folder update")
+	// 			return false
+	// 		}
+	// 	} else {
+	// 		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
+	// 		_, err := executeCommandAndWait(cmd)
+	// 		if err != nil {
+	// 			u.failedExecution(err, "error on folder update")
+	// 			return false
+	// 		}
+	// 	}
+	// }
 
 	// File Update
-	for _, manifestFileUpdate := range u.manifest.Updates.FileUpdates {
-		from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.Update
-		to_path := manifestFileUpdate.Path
+	// for _, manifestFileUpdate := range u.manifest.FileUpdates {
+	// 	from_path := u.dataPartition.MountPoint + "/updates/" + manifestFileUpdate.UpdateFile
+	// 	to_path := manifestFileUpdate.DestinationPath
 
-		cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
-		_, err := executeCommandAndWait(cmd)
-		if err != nil {
-			u.failedExecution(err, "error on file update")
-			return false
+	// 	cmd := exec.Command("ionice", "rsync", "-a", "--info=progress2", from_path, to_path)
+	// 	_, err := executeCommandAndWait(cmd)
+	// 	if err != nil {
+	// 		u.failedExecution(err, "error on file update")
+	// 		return false
+	// 	}
+	// }
+
+	// File/Folder Update
+	for _, f := range zipReader.File {
+		isUpdateDone := false
+
+		for _, eachFolder := range u.manifest.FolderUpdates {
+			if eachFolder.UpdateFolder == strings.Split(f.Name, "/")[0] {
+				fullPath := filepath.Join(eachFolder.DestinationPath, f.Name)
+				if f.FileInfo().IsDir() {
+					if err := handleDirectory(fullPath, f.Mode(), eachFolder.Overwrite); err != nil {
+						u.failedExecution(err, fmt.Sprintf("%s folder create error", f.Name))
+						return false
+					}
+					continue
+				}
+
+				if err := writeZipEntry(f, fullPath); err != nil {
+					u.failedExecution(err, fmt.Sprintf("%s file write error", f.Name))
+					return false
+				}
+				isUpdateDone = true
+				break
+			}
 		}
+
+		if !isUpdateDone { // remaining files are processed
+			for _, eachFile := range u.manifest.FileUpdates {
+				if eachFile.UpdateFile == f.Name {
+					fullPath := filepath.Join(eachFile.DestinationPath, f.Name)
+
+					if err := writeZipEntry(f, fullPath); err != nil {
+						u.failedExecution(err, fmt.Sprintf("%s file write error", f.Name))
+						return false
+					}
+					break
+				}
+			}
+		}
+
+		// File update
+		// for _, manifestFile := range u.manifest.FileUpdates {
+		// 	if f.Name == manifestFile.UpdateFile {
+		// 		if err := writeZipEntry(f, manifestFile.DestinationPath); err != nil {
+		// 			u.failedExecution(err, fmt.Sprintf("%s file write error", f.Name))
+		// 			return false
+		// 		}
+		// 		break
+		// 	}
+		// }
+
+		// Folder update
+		// for _, manifestFolder := range u.manifest.FolderUpdates {
+		// 	if strings.Split(f.Name, "/")[0] == manifestFolder.UpdateFolder {
+		// 		if err := handleDirectory(manifestFolder.DestinationPath, f.Mode(), manifestFolder.Overwrite); err != nil {
+		// 			u.failedExecution(err, fmt.Sprintf("%s folder write error", f.Name))
+		// 			return false
+		// 		}
+		// 		continue
+		// 	}
+
+		// 	if err := writeZipEntry(f, manifestFolder.DestinationPath); err != nil {
+		// 		u.failedExecution(err, fmt.Sprintf("%s file write error", f.Name))
+		// 		return false
+		// 	}
+		// 	break
+		// }
 	}
 
 	return true
+}
+
+// initiateOSUpdateStream will update system files in device
+func (u *UpdateService) initiateOSUpdateStream(f *zip.File, inactivePartition string) error {
+	// Unmount inactive partition
+	err := syscall.Unmount(inactivePartition, 0) // 0 for default flags
+	if err != nil {
+		return err
+	}
+
+	// Stream file contents
+	src, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(inactivePartition, os.O_WRONLY|os.O_SYNC, 0)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
 }
 
 // initiateOSUpdate will update system files in device
@@ -1030,6 +1252,85 @@ func (u *UpdateService) deleteExtractedFile(extractedFilePath string) (bool, err
 
 	return true, nil
 }
+
+func getAvailableSpaceBytesByPath(path string) (uint64, error) {
+	var stat unix.Statfs_t
+
+	err := unix.Statfs(path, &stat)
+	if err != nil {
+		return 0, err
+	}
+
+	return stat.Bavail * uint64(stat.Bsize), nil
+}
+
+func extractEntireZip(zipPath, targetRoot string, overwriteFolders bool) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		fmt.Println("file: ", f.Name)
+		targetPath := filepath.Join(targetRoot, f.Name)
+		fmt.Println("targetPath: ", targetPath)
+		if f.FileInfo().IsDir() {
+			if err := handleDirectory(targetPath, f.Mode(), overwriteFolders); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Always overwrite files
+		if err := writeZipEntry(f, targetPath); err != nil {
+			return fmt.Errorf("failed to write %s: %w", targetPath, err)
+		}
+	}
+
+	return nil
+}
+
+func handleDirectory(targetPath string, mode os.FileMode, overwriteFolders bool) error {
+	if _, err := os.Stat(targetPath); err == nil {
+		// Folder exists
+		if overwriteFolders {
+			fmt.Println("🗑️ Removing existing folder:", targetPath)
+			if err := os.RemoveAll(targetPath); err != nil {
+				return fmt.Errorf("failed to remove folder: %w", err)
+			}
+		} else {
+			fmt.Println("📁 Keeping existing folder:", targetPath)
+			return nil // Skip deletion, but files will still be overwritten
+		}
+	}
+
+	return os.MkdirAll(targetPath, mode)
+}
+
+func writeZipEntry(f *zip.File, targetPath string) error {
+	src, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	// Create necessary directories
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return err
+	}
+
+	dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_SYNC, f.Mode())
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+// COMMAND FUNCTIONS
 
 func executeCommandAndGetOutput(cmd *exec.Cmd) (string, error) {
 	output, err := cmd.CombinedOutput() // Captures both stdout and stderr
